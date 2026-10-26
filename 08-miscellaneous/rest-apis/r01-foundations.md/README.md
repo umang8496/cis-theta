@@ -39,7 +39,8 @@ An API contract is everything a client may rely on.
 
 Contracts are **explicit** (OpenAPI, `.proto`, GraphQL SDL) or **implicit**.
 
-**Hyrum's Law:** with enough users, every observable behaviour becomes part of the contract, documented or not (field order, timing, error text). Keep the implicit surface small.
+**Hyrum's Law:** with enough users, every observable behaviour becomes part of the contract, documented or not (field order, timing, error text).  
+Keep the implicit surface small.
 
 ### Unit of abstraction per style
 
@@ -67,9 +68,7 @@ Contracts are **explicit** (OpenAPI, `.proto`, GraphQL SDL) or **implicit**.
 ### Misconceptions
 
 - "REST = JSON over HTTP." REST is a set of constraints; JSON is one representation.
-
 - `POST /api/createOrder` is RPC wearing REST clothes (maturity level 0).
-
 - "gRPC runs on HTTP, so it is RESTful." It uses HTTP/2 as transport, not its method semantics.
 
 ### Same read, two styles
@@ -133,17 +132,19 @@ Fielding co-authored HTTP/1.1 and the URI specs; REST is the model used to guide
 
 ### Style, not protocol
 
-An **architectural style** is a named set of constraints; each constraint trades freedom for a property. Fielding starts from the null style and adds constraints one by one.
+An **architectural style** is a named set of constraints; each constraint trades freedom for a property.  
+Fielding starts from the null style and adds constraints one by one.
 
-| Property                  | Why the Web needed it                                     |
-| ------------------------- | --------------------------------------------------------- |
-| Anarchic scalability      | Millions of uncoordinated clients and servers             |
+| Property                  | Why the Web needed it                                        |
+| ------------------------- | ------------------------------------------------------------ |
+| Anarchic scalability      | Millions of uncoordinated clients and servers                |
 | Independent evolvability  | Clients and servers deploy on separate schedules for decades |
-| Latency hiding            | Caches and intermediaries absorb load and distance        |
-| Generality of interfaces  | Any client can talk to any server without bespoke code    |
-| Visibility                | Intermediaries understand a request without the application |
+| Latency hiding            | Caches and intermediaries absorb load and distance           |
+| Generality of interfaces  | Any client can talk to any server without bespoke code       |
+| Visibility                | Intermediaries understand a request without the application  |
 
-REST is not a protocol, format or framework. HTTP is its most successful implementation; a system can use HTTP and still violate REST.
+REST is not a protocol, format or framework.  
+HTTP is its most successful implementation; a system can use HTTP and still violate REST.
 
 ### Vocabulary
 
@@ -155,7 +156,8 @@ REST is not a protocol, format or framework. HTTP is its most successful impleme
 - **Representation**: bytes plus metadata (media type, language, encoding) capturing state at a moment.  
   One resource, many representations.
 
-- **Representational State Transfer**: clients exchange representations, never resources. Application state advances by following links in representations (HATEOAS, R12).
+- **Representational State Transfer**: clients exchange representations, never resources.  
+  Application state advances by following links in representations (HATEOAS, R12).
 
 ### Fielding's own trade-off
 
@@ -165,9 +167,7 @@ It is deliberately less efficient for fine-grained, chatty interaction. GraphQL 
 ### Misconceptions
 
 - "REST is CRUD over tables." Resources are domain concepts; representations are decoupled from storage.
-
 - "A URI is a file path." It is an opaque identifier; clients should follow links rather than construct URIs.
-
 - Fielding, 2008: *"REST APIs must be hypertext-driven."* Most "REST APIs" are HTTP APIs at maturity level 2. Acceptable, if labelled honestly.
 
 ### One resource, two representations
@@ -205,14 +205,14 @@ Level 2, because clients are generated SDKs and hypermedia would add payload wit
 
 ## R1.3 The six constraints
 
-| #  | Constraint         | Buys                                                          | Costs                                    |
-| -- | ------------------ | ------------------------------------------------------------- | ---------------------------------------- |
-| 1  | Client-server      | Independent evolution of UI and backend; simpler servers       | A network hop per interaction            |
-| 2  | Stateless          | Horizontal scale, trivial failover, visibility, reliability    | Repeated context per request, larger messages |
-| 3  | Cacheable          | Latency hiding, origin offload, scale                         | Staleness risk; correctness needs R9     |
-| 4  | Uniform interface  | Generality, visibility to every intermediary                   | Not optimal for any one application      |
-| 5  | Layered system     | Insert LB, CDN, gateway, WAF, TLS termination transparently   | A latency hop per layer                  |
-| 6  | Code on demand (optional) | Client extensibility after deployment                  | Reduced visibility; rarely used in JSON APIs |
+| #  | Constraint         | Buys                                                          | Costs                                         |
+| -- | ------------------ | ------------------------------------------------------------- | --------------------------------------------- |
+| 1  | Client-server      | Independent evolution of UI and backend; simpler servers      | A network hop per interaction                 |
+| 2  | Stateless          | Horizontal scale, trivial failover, visibility, reliability   | Repeated context per request, larger messages |
+| 3  | Cacheable          | Latency hiding, origin offload, scale                         | Staleness risk; correctness needs R9          |
+| 4  | Uniform interface  | Generality, visibility to every intermediary                  | Not optimal for any one application           |
+| 5  | Layered system     | Insert LB, CDN, gateway, WAF, TLS termination transparently   | A latency hop per layer                       |
+| 6  | Code on demand     | Client extensibility after deployment                         | Reduced visibility; rarely used in JSON APIs  |
 
 ### Stateless, precisely
 
@@ -222,12 +222,12 @@ Typical violations: sticky sessions, in-memory pagination cursors, server-side w
 
 ### Uniform interface, four sub-constraints
 
-| Sub-constraint                        | Meaning                                                        |
-| ------------------------------------- | -------------------------------------------------------------- |
-| Identification of resources           | Every resource has a URI                                       |
-| Manipulation through representations  | State changes by sending representations, not calling procedures |
+| Sub-constraint                        | Meaning                                                               |
+| ------------------------------------- | --------------------------------------------------------------------- |
+| Identification of resources           | Every resource has a URI                                              |
+| Manipulation through representations  | State changes by sending representations, not calling procedures      |
 | Self-descriptive messages             | Method, status, media type and headers suffice to process the message |
-| HATEOAS                               | Representations carry links to next valid actions              |
+| HATEOAS                               | Representations carry links to next valid actions                     |
 
 ### How they compound
 
@@ -274,7 +274,8 @@ Name the violated constraint (statelessness), the options (sticky sessions, exte
 
 ## R1.4 Richardson Maturity Model
 
-Leonard Richardson, QCon 2008; popularized by Martin Fowler, 2010. A ladder of how much of the Web's machinery an HTTP API uses.  
+Leonard Richardson, QCon 2008; popularized by Martin Fowler, 2010.  
+A ladder of how much of the Web's machinery an HTTP API uses.  
 Not a definition of REST: by Fielding's definition only level 3 qualifies.
 
 ```mermaid
@@ -380,7 +381,6 @@ async fn slot(id: web::Path<u64>, svc: web::Data<Slots>) -> HttpResponse {
 ### Reality check
 
 - Most production APIs (Stripe, GitHub) are **level 2**; GitHub adds partial level 3 (URLs in payloads, `Link` headers for pagination).
-
 - Level 3 pays off with many long-lived clients, workflow-heavy domains, or server-driven UI. It rarely pays off with generated SDKs or one co-deployed client.
 
 ### Interview angle
@@ -447,39 +447,24 @@ Content-Type: application/json
 ### Spring Boot (Web MVC, embedded Tomcat)
 
 1. Tomcat connector accepts and parses; a pool thread takes the request (thread per request; virtual threads via `spring.threads.virtual.enabled=true` on Boot 3.2+).
-
 2. Servlet filter chain: Spring Security, CORS, your `OncePerRequestFilter`.
-
 3. `DispatcherServlet` (front controller).
-
 4. `HandlerMapping` matches the route.
-
 5. `HandlerInterceptor.preHandle`.
-
 6. Argument resolution: `@PathVariable`, `@RequestParam`, `@RequestBody` via `HttpMessageConverter` (Jackson).
-
 7. Controller method runs.
-
 8. Return value serialized by an `HttpMessageConverter` per `Accept` and `produces`.
-
 9. Exceptions via `HandlerExceptionResolver` and `@ControllerAdvice`.
-
 10. Response committed; thread returns to the pool.
 
 ### Actix Web
 
 1. `actix-server` runs N workers (default: physical cores), each a single-threaded async runtime. The `App` closure runs once per worker, so shared state goes in `web::Data<T>` (an `Arc`).
-
 2. `actix-http` parses the request.
-
 3. Middleware (`.wrap(...)`) as an onion; the last registered runs outermost.
-
 4. Router matches resource, method and guards.
-
 5. Extractors (`FromRequest`): `Path`, `Query`, `Json`, `Data`, custom. Failure yields an error response before the handler runs.
-
 6. Async handler returns a `Responder`.
-
 7. Errors converted through `ResponseError`.
 
 ### Comparison

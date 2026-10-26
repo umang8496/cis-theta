@@ -13,18 +13,18 @@
 
 ## Contents
 
-| #     | Sub-topic                                                                                  |
-| ----- | ------------------------------------------------------------------------------------------ |
-| R2.1  | [Request and response anatomy; URI structure](#r21-request-and-response-anatomy-uri-structure) |
-| R2.2  | [HTTP/1.1 vs HTTP/2 vs HTTP/3](#r22-http11-vs-http2-vs-http3)                              |
-| R2.3  | [Methods: safe, idempotent, cacheable](#r23-methods-safe-idempotent-cacheable)             |
-| DD-1  | [Deep dive: how `upsert` makes PUT idempotent](#dd-1-how-upsert-makes-put-idempotent)      |
-| DD-2  | [Deep dive: idempotency is not a cache](#dd-2-idempotency-is-not-a-cache)                  |
-| DD-3  | [Deep dive: idempotency in distributed systems](#dd-3-idempotency-in-distributed-systems)  |
+| #     | Sub-topic                                                                                         |
+| ----- | ------------------------------------------------------------------------------------------------- |
+| R2.1  | [Request and response anatomy; URI structure](#r21-request-and-response-anatomy-uri-structure)    |
+| R2.2  | [HTTP/1.1 vs HTTP/2 vs HTTP/3](#r22-http11-vs-http2-vs-http3)                                     |
+| R2.3  | [Methods: safe, idempotent, cacheable](#r23-methods-safe-idempotent-cacheable)                    |
+| DD-1  | [Deep dive: how `upsert` makes PUT idempotent](#dd-1-how-upsert-makes-put-idempotent)             |
+| DD-2  | [Deep dive: idempotency is not a cache](#dd-2-idempotency-is-not-a-cache)                         |
+| DD-3  | [Deep dive: idempotency in distributed systems](#dd-3-idempotency-in-distributed-systems)         |
 | DD-4  | [Clarification: the key comes from the client](#dd-4-clarification-the-key-comes-from-the-client) |
-| R2.4  | [Statelessness in practice](#r24-statelessness-in-practice)                                |
-| -     | [Exercises with model answers](#exercises-with-model-answers)                              |
-| -     | [Takeaways](#takeaways)                                                                    |
+| R2.4  | [Statelessness in practice](#r24-statelessness-in-practice)                                       |
+| -     | [Exercises with model answers](#exercises-with-model-answers)                                     |
+| -     | [Takeaways](#takeaways)                                                                           |
 
 ---
 
@@ -47,10 +47,10 @@ Content-Length: 0
 
 ### Semantics vs framing
 
-| Layer     | RFC                                | Contents                                                       |
-| --------- | ---------------------------------- | -------------------------------------------------------------- |
+| Layer     | RFC                                | Contents                                                             |
+| --------- | ---------------------------------- | -------------------------------------------------------------------- |
 | Semantics | 9110                               | Methods, status codes, headers, representations; version-independent |
-| Framing   | 9112 (1.1), 9113 (h2), 9114 (h3)   | How bytes travel on the wire                                    |
+| Framing   | 9112 (1.1), 9113 (h2), 9114 (h3)   | How bytes travel on the wire                                         |
 
 In HTTP/2 and HTTP/3 the request line becomes pseudo-headers (`:method`, `:path`, `:scheme`, `:authority`, `:status`), header names are lowercase, and there is no reason phrase.  
 API design is unaffected.
@@ -58,12 +58,9 @@ API design is unaffected.
 ### Body framing
 
 - **`Content-Length`**: exact byte count.
-
 - **`Transfer-Encoding: chunked`**: streamed chunks ending with a zero-length chunk; optional trailers (for example a checksum) may follow.
-
 - **Both present**: front proxy and backend may disagree on where the request ends.  
   This is **request smuggling** (CL.TE, TE.CL). Normalize at the edge and reject such requests.
-
 - **`GET` with a body**: RFC 9110 gives it no defined semantics; intermediaries may drop or reject it.  
   Use query parameters, `POST /orders/search`, or the emerging `QUERY` method (IETF draft: safe, idempotent, with a body).
 
@@ -348,7 +345,8 @@ Insert or replace, keyed by the client-chosen ID:
 if (repo.exists(id)) repo.update(id, body); else repo.insert(id, body);   // check-then-act race
 ```
 
-Two concurrent first-time PUTs (a retry racing its original) both see "not exists" and both insert: one fails on the primary key with a `500`, or, without a key, you get duplicates. **Enforce idempotency atomically in the database.**
+Two concurrent first-time PUTs (a retry racing its original) both see "not exists" and both insert: one fails on the primary key with a `500`, or, without a key, you get duplicates.  
+**Enforce idempotency atomically in the database.**
 
 ### Correct implementation (PostgreSQL)
 
@@ -406,13 +404,13 @@ async fn upsert(pool: &PgPool, id: Uuid, o: &Order) -> sqlx::Result<bool> {
 }
 ```
 
-| Piece                                       | Role                                                                 |
-| ------------------------------------------- | -------------------------------------------------------------------- |
-| `PRIMARY KEY (id)` + `ON CONFLICT (id)`     | One atomic statement; the race disappears                            |
-| `DO UPDATE SET` all client-owned columns    | Full replacement (PUT semantics)                                     |
-| `created_at` not in `SET`                   | Server-owned fields survive replacement                              |
-| `WHERE … IS DISTINCT FROM …`                | Identical retry writes nothing; `version`, `updated_at`, ETag stay stable |
-| `RETURNING (xmax = 0)`                      | PostgreSQL idiom for inserted vs updated; relies on an internal system column |
+| Piece                                    | Role                                                                          |
+| :--------------------------------------- | :---------------------------------------------------------------------------- |
+| `PRIMARY KEY (id)` + `ON CONFLICT (id)`  | One atomic statement; the race disappears                                     |
+| `DO UPDATE SET` all client-owned columns | Full replacement (PUT semantics)                                              |
+| `created_at` not in `SET`                | Server-owned fields survive replacement                                       |
+| `WHERE … IS DISTINCT FROM …`             | Identical retry writes nothing; `version`, `updated_at`, ETag stay stable     |
+| `RETURNING (xmax = 0)`                   | PostgreSQL idiom for inserted vs updated; relies on an internal system column |
 
 MySQL equivalent: `INSERT … ON DUPLICATE KEY UPDATE` (affected rows: 1 insert, 2 update, 0 unchanged).
 
@@ -430,23 +428,24 @@ MySQL equivalent: `INSERT … ON DUPLICATE KEY UPDATE` (affected rows: 1 insert,
 
 Idempotency is a **property of an operation's effect**. A dedup store is **one technique** to give that property to an operation that lacks it.
 
-| Route               | Mechanism                                                                 | Store needed | Typical use                                   |
-| ------------------- | ------------------------------------------------------------------------- | ------------ | --------------------------------------------- |
-| By design           | Set state at a client-chosen key (`PUT /x/{uuid}`, `DELETE`, status = PAID) + unique constraint | None | Creates with client IDs, state transitions |
-| By deduplication    | `POST` + `Idempotency-Key`; server records key → outcome, replays it      | Yes          | Payments, sends, server-generated IDs, external effects |
+| Route            | Mechanism                                                                                       | Store needed | Typical use                                             |
+| :--------------- | :---------------------------------------------------------------------------------------------- | :----------- | :------------------------------------------------------ |
+| By design        | Set state at a client-chosen key (`PUT /x/{uuid}`, `DELETE`, status = PAID) + unique constraint | None         | Creates with client IDs, state transitions              |
+| By deduplication | `POST` + `Idempotency-Key`; server records key → outcome, replays it                            | Yes          | Payments, sends, server-generated IDs, external effects |
 
 ### Why "cache" is the wrong model
 
 A cache may lose data; a dedup store must not.
 
-| Naive Redis approach                                   | Failure                                       |
-| ------------------------------------------------------ | --------------------------------------------- |
-| Key written to Redis, then DB transaction fails        | Retry rejected as duplicate; nothing happened |
-| DB commit succeeds, then Redis write fails             | Retry executes again: duplicate               |
-| LRU eviction, short TTL, failover with async replication | Key lost: duplicate                          |
-| Two concurrent requests with the same key              | Both pass check-then-set: duplicate           |
+| Naive Redis approach                                     | Failure                                       |
+| :------------------------------------------------------- | :-------------------------------------------- |
+| Key written to Redis, then DB transaction fails          | Retry rejected as duplicate; nothing happened |
+| DB commit succeeds, then Redis write fails               | Retry executes again: duplicate               |
+| LRU eviction, short TTL, failover with async replication | Key lost: duplicate                           |
+| Two concurrent requests with the same key                | Both pass check-then-set: duplicate           |
 
-**Rule**: record the key atomically with the business effect, in the same database transaction, with a unique constraint as the guarantee. Redis may be a fast path only.
+**Rule**: record the key atomically with the business effect, in the same database transaction, with a unique constraint as the guarantee.  
+Redis may be a fast path only.
 
 HTTP caching (R9) is unrelated: it stores responses to safe methods and never makes a write idempotent.
 
@@ -608,17 +607,17 @@ Kafka exactly-once covers only Kafka-to-Kafka; writes to your database need your
 
 ### Design decisions
 
-| Decision                    | Recommendation                                                     | Why                                                        |
-| --------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------- |
-| Who generates the key       | Client, once per logical operation, reused on retry                | Server-generated keys cannot survive a lost response       |
-| Derive key from body?       | No                                                                 | Two genuine identical operations would collapse            |
-| Scope                       | `(client_id, key)`, optionally plus endpoint                       | Prevents collisions and cross-tenant replay                |
-| Retention                   | Longer than the client's maximum retry window (Stripe: 24 h); purge job | After expiry, same key = new operation; document it   |
-| Outcomes to store           | Final: 2xx and deterministic 4xx                                   | Replaying them is correct                                  |
-| Outcomes not to store       | 5xx, 429, 503 (single-tx pattern rolls them back anyway)           | Transient failures must remain retryable                   |
-| Table location              | Same database and shard as the business data                       | Otherwise the single transaction is a dual write again     |
-| Redis                       | Optional fast path (`SET NX` + TTL) to shed concurrent duplicates  | Never the source of truth                                  |
-| Missing key on required endpoint | `400`                                                         | Mandatory for money-moving POSTs                           |
+| Decision                         | Recommendation                                                          | Why                                                    |
+| :------------------------------- | :---------------------------------------------------------------------- | :----------------------------------------------------- |
+| Who generates the key            | Client, once per logical operation, reused on retry                     | Server-generated keys cannot survive a lost response   |
+| Derive key from body?            | No                                                                      | Two genuine identical operations would collapse        |
+| Scope                            | `(client_id, key)`, optionally plus endpoint                            | Prevents collisions and cross-tenant replay            |
+| Retention                        | Longer than the client's maximum retry window (Stripe: 24 h); purge job | After expiry, same key = new operation; document it    |
+| Outcomes to store                | Final: 2xx and deterministic 4xx                                        | Replaying them is correct                              |
+| Outcomes not to store            | 5xx, 429, 503 (single-tx pattern rolls them back anyway)                | Transient failures must remain retryable               |
+| Table location                   | Same database and shard as the business data                            | Otherwise the single transaction is a dual write again |
+| Redis                            | Optional fast path (`SET NX` + TTL) to shed concurrent duplicates       | Never the source of truth                              |
+| Missing key on required endpoint | `400`                                                                   | Mandatory for money-moving POSTs                       |
 
 ---
 
@@ -640,11 +639,11 @@ Idempotency-Key: 6f1c2e0a-8b7d-4c1e-9a55-0d3f2b9e7c41     ← generated once by 
 
 The body hash is **not** the key. It is a fingerprint stored beside the key to detect misuse: same key with a different body gets `422`.
 
-| Scenario                                          | Body-derived key                          | Client key                                  |
-| ------------------------------------------------- | ----------------------------------------- | ------------------------------------------- |
-| User genuinely buys two identical ₹500 coffees    | Wrongly collapsed into one payment        | Two keys, two payments: correct             |
-| Retry whose body differs trivially (timestamp, field order) | Not deduplicated: duplicate charge | Same key, deduplicated                   |
-| Retry after app restart                           | Works only if the body is byte-identical  | Works, if the client persisted the key      |
+| Scenario                                                    | Body-derived key                         | Client key                             |
+| :---------------------------------------------------------- | :--------------------------------------- | :------------------------------------- |
+| User genuinely buys two identical ₹500 coffees              | Wrongly collapsed into one payment       | Two keys, two payments: correct        |
+| Retry whose body differs trivially (timestamp, field order) | Not deduplicated: duplicate charge       | Same key, deduplicated                 |
+| Retry after app restart                                     | Works only if the body is byte-identical | Works, if the client persisted the key |
 
 Only the client knows whether a request is a retry or a new intent; the key is how it says so.
 
@@ -656,12 +655,12 @@ A visible `STARTED` state appears only in the atomic-phases variant (DD-3 b).
 
 ### What happens on retry
 
-| What happened to attempt 1             | Server state                                | Retry (same key, same body) gets         |
-| -------------------------------------- | ------------------------------------------- | ---------------------------------------- |
-| Request never arrived                  | No key                                      | Processed normally: `201`                |
-| Server failed mid-way (5xx, crash)     | Transaction rolled back: no key             | Processed normally: `201`                |
-| Succeeded, response lost               | Key + response committed                    | Replay of the original `201`             |
-| Still in flight                        | Insert blocks, then replays (or `409` in phased variant) | Original outcome            |
+| What happened to attempt 1         | Server state                                             | Retry (same key, same body) gets |
+| :--------------------------------- | :------------------------------------------------------- | :------------------------------- |
+| Request never arrived              | No key                                                   | Processed normally: `201`        |
+| Server failed mid-way (5xx, crash) | Transaction rolled back: no key                          | Processed normally: `201`        |
+| Succeeded, response lost           | Key + response committed                                 | Replay of the original `201`     |
+| Still in flight                    | Insert blocks, then replays (or `409` in phased variant) | Original outcome                 |
 
 ### Client side
 
@@ -714,12 +713,12 @@ Statelessness forbids only the second kind on the server.
 
 4. **External store behind an opaque token**: Redis session keyed by a cookie. Scales; bends REST visibility; the pragmatic choice for instant revocation.
 
-| Option                    | Request size       | Revocation           | Tamper-proof | Watch out for                                           |
-| ------------------------- | ------------------ | -------------------- | ------------ | ------------------------------------------------------- |
-| In the request (plain)    | Small              | n/a                  | No           | Trusting client-sent IDs (BOLA, R10)                    |
-| Resource                  | Small (an ID)      | Delete the resource  | Yes          | Cleanup of abandoned resources                          |
-| Signed / encrypted token  | Grows with content | Hard until expiry    | Yes          | Header limits (~8 KB, `431`); JWT is encoded, not encrypted |
-| External session store    | Small              | Instant              | Yes          | Hot-path dependency, HA, failover data loss             |
+| Option                   | Request size       | Revocation          | Tamper-proof | Watch out for                                               |
+| :----------------------- | :----------------- | :------------------ | :----------- | :---------------------------------------------------------- |
+| In the request (plain)   | Small              | n/a                 | No           | Trusting client-sent IDs (BOLA, R10)                        |
+| Resource                 | Small (an ID)      | Delete the resource | Yes          | Cleanup of abandoned resources                              |
+| Signed / encrypted token | Grows with content | Hard until expiry   | Yes          | Header limits (~8 KB, `431`); JWT is encoded, not encrypted |
+| External session store   | Small              | Instant             | Yes          | Hot-path dependency, HA, failover data loss                 |
 
 ### Hidden statefulness that breaks at node 2
 
@@ -781,13 +780,13 @@ GET /orders?limit=20&cursor=eyJsYXN0SWQiOjEyMzR9.Qm9n...   → any node, retry-s
 
 > For each operation give method, URI, success status, and whether a proxy may auto-retry it.
 
-| Operation                         | Method and URI                                                 | Success                         | Auto-retry | Notes |
-| --------------------------------- | -------------------------------------------------------------- | ------------------------------- | ---------- | ----- |
-| a) Archive a document             | `PUT /documents/{id}/archival` (or `PATCH /documents/{id} {"status":"ARCHIVED"}`) | `200`/`204` (`201` first time if the sub-resource is new) | PUT: yes; PATCH: no | Not `DELETE`: the document still exists. Unarchive with `DELETE /documents/{id}/archival`. |
-| b) Add one item to a cart         | `PUT /carts/{cartId}/items/{sku} {"quantity": 3}`              | `201` (new line) / `200`        | Yes        | Keying the line by SKU turns "add" into "set". If "add" must stay additive: `POST /carts/{cartId}/items` → `201` + `Location`, not retryable, protect with `Idempotency-Key`. |
-| c) Set a user's email             | `PUT /users/{id}/email {"email": "..."}`                        | `200`/`204`; `202` if verification is required | Yes | With verification, the change is pending until confirmed; the verification mail is a side effect to deduplicate. `409` if the email belongs to another account. |
-| d) Report taking ~2 minutes       | `POST /report-runs {"type": "...", "range": "..."}`            | `202 Accepted` + `Location: /report-runs/{id}` + `Retry-After` | No | Poll `GET /report-runs/{id}` (`200` with status); when done, `303 See Other` to `/reports/{id}` or a link. Use `Idempotency-Key` to avoid duplicate runs. Webhook as an alternative to polling. |
-| e) Search with 15 filters, long lists | `GET /orders?...` while it fits (~8 KB); else `POST /order-searches` → `201` + `Location: /order-searches/{id}`, then `GET /order-searches/{id}/results` | `200` / `201` | GET: yes; POST: no | The saved-search resource keeps results cacheable and shareable. A plain `POST /orders/search` returning results works but is not cacheable. `QUERY` once supported. |
+| Operation                             | Method and URI                                                                                                                                           | Success                                                        | Auto-retry         | Notes                                                                                                                                                                                           |
+| :------------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------- | :----------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| a) Archive a document                 | `PUT /documents/{id}/archival` (or `PATCH /documents/{id} {"status":"ARCHIVED"}`)                                                                        | `200`/`204` (`201` first time if the sub-resource is new)      | PUT: yes; PATCH: no| Not `DELETE`: the document still exists. Unarchive with `DELETE /documents/{id}/archival`.                                                                                                      |
+| b) Add one item to a cart             | `PUT /carts/{cartId}/items/{sku} {"quantity": 3}`                                                                                                        | `201` (new line) / `200`                                       | Yes                | Keying the line by SKU turns "add" into "set". If "add" must stay additive: `POST /carts/{cartId}/items` → `201` + `Location`, not retryable, protect with `Idempotency-Key`.                   |
+| c) Set a user's email                 | `PUT /users/{id}/email {"email": "..."}`                                                                                                                 | `200`/`204`; `202` if verification is required                 | Yes                | With verification, the change is pending until confirmed; the verification mail is a side effect to deduplicate. `409` if the email belongs to another account.                                 |
+| d) Report taking ~2 minutes           | `POST /report-runs {"type": "...", "range": "..."}`                                                                                                      | `202 Accepted` + `Location: /report-runs/{id}` + `Retry-After` | No                 | Poll `GET /report-runs/{id}` (`200` with status); when done, `303 See Other` to `/reports/{id}` or a link. Use `Idempotency-Key` to avoid duplicate runs. Webhook as an alternative to polling. |
+| e) Search with 15 filters, long lists | `GET /orders?...` while it fits (~8 KB); else `POST /order-searches` → `201` + `Location: /order-searches/{id}`, then `GET /order-searches/{id}/results` | `200` / `201`                                                  | GET: yes; POST: no | The saved-search resource keeps results cacheable and shareable. A plain `POST /orders/search` returning results works but is not cacheable. `QUERY` once supported.                            |
 
 ### Exercise 2: stateless checkout
 
@@ -861,13 +860,14 @@ retry (same key K, same body)
 
 **Responsibilities**
 
-| Component | Must do |
-| --------- | ------- |
-| Client    | Generate key K once when the user confirms, persist it, retry with the same key and body using backoff and jitter. Treat `409` as "in progress". On timeout, show "processing", never "failed", and never mint a new key. |
-| API       | Record the key with its own writes atomically; split around the gateway call into phases with a recovery point and a lease; send a derived key downstream; mark success only after the gateway confirms; replay stored responses; `422` on body mismatch. Run a **sweeper** that resumes `STARTED` keys with expired leases, so the transfer completes even if the client never retries. |
-| Gateway   | Honour the idempotency key for longer than the API's retry window, returning the original result on replay. If it has no idempotency support, it must at least allow lookup by client reference (`GET /transfers?reference=K:transfer`); the API then **queries before re-sending**. Daily reconciliation catches anything left over. |
+| Component | Must do                                                                                                                                                                                                                                                                                                                                                                                          |
+| :-------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Client    | Generate key K once when the user confirms, persist it, retry with the same key and body using backoff and jitter. Treat `409` as "in progress". On timeout, show "processing", never "failed", and never mint a new key.                                                                                                                                                                        |
+| API       | Record the key with its own writes atomically; split around the gateway call into phases with a recovery point and a lease; send a derived key downstream; mark success only after the gateway confirms; replay stored responses; `422` on body mismatch. Run a **sweeper** that resumes `STARTED` keys with expired leases, so the transfer completes even if the client never retries.         |
+| Gateway   | Honour the idempotency key for longer than the API's retry window, returning the original result on replay. If it has no idempotency support, it must at least allow lookup by client reference (`GET /transfers?reference=K:transfer`); the API then **queries before re-sending**. Daily reconciliation catches anything left over.                                                            |
 
-**Alternative when the gateway is slow**: respond `202 Accepted` with `Location: /transfers/T` immediately after tx1, process the gateway call asynchronously (outbox), and let the client poll or receive a webhook. The 10-second client timeout then never races the gateway.
+**Alternative when the gateway is slow**: respond `202 Accepted` with `Location: /transfers/T` immediately after tx1, process the gateway call asynchronously (outbox), and let the client poll or receive a webhook.  
+The 10-second client timeout then never races the gateway.
 
 ---
 

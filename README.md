@@ -15,5 +15,8 @@
 - [03. HLD and System Design](./03-hld-and-system-design/README.md)
 - [04. Bookshelf and Papers](./04-bookshelf-and-papers/README.md)
 - [05. Interview Playbooks](./05-interview-playbooks/README.md)
+- [06. Database Literature](./06-database-literature/README.md)
+- [07. Application Deployment](./07-application-deployment/README.md)
+- [08. Miscellaneous](./08-miscellaneous/README.md)
 
 ---
