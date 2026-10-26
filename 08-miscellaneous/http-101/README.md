@@ -385,9 +385,9 @@ R2.2 gives the summary. This module goes to the frames (RFC 9113).
 | --- | ----------------------------------------------- | ----------- |
 | H01 | Bytes, encodings and framing                    | Completed   |
 | H02 | The network stack and encapsulation             | Completed   |
-| H03 | DNS                                             | Not started |
-| H04 | TCP in depth                                    | Not started |
-| H05 | Sockets and I/O models                          | Not started |
+| H03 | DNS                                             | Completed   |
+| H04 | TCP in depth                                    | Completed   |
+| H05 | Sockets and I/O models                          | Completed   |
 | H06 | HTTP/0.9 and HTTP/1.0                           | Not started |
 | H07 | HTTP/1.1 message syntax and framing             | Not started |
 | H08 | Connections, proxies and upgrades               | Not started |
