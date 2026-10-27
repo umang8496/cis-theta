@@ -198,15 +198,15 @@ This module answers the question of why clients send `X-` headers.
 
 | #   | Module                          | Status      |
 | --- | ------------------------------- | ----------- |
-| R1  | Foundations                     | Not started |
-| R2  | HTTP as the substrate           | Not started |
-| R3  | HTTP status codes (complete)    | Not started |
-| R4  | HTTP headers, standard and `X-` | Not started |
-| R5  | Resource modeling               | Not started |
-| R6  | Request and response design     | Not started |
-| R7  | Error model                     | Not started |
-| R8  | Idempotency and concurrency     | Not started |
-| R9  | Caching                         | Not started |
+| R01 | Foundations                     | Completed   |
+| R02 | HTTP as the substrate           | Completed   |
+| R03 | HTTP status codes (complete)    | Completed   |
+| R04 | HTTP headers, standard and `X-` | Not started |
+| R05 | Resource modeling               | Not started |
+| R06 | Request and response design     | Not started |
+| R07 | Error model                     | Not started |
+| R08 | Idempotency and concurrency     | Not started |
+| R09 | Caching                         | Not started |
 | R10 | Security                        | Not started |
 | R11 | Evolution and versioning        | Not started |
 | R12 | HATEOAS and hypermedia          | Not started |
