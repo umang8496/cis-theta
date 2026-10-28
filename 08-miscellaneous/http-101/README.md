@@ -233,7 +233,8 @@ Short module. Only what changes the bytes of the body; full semantics stay in R2
 
 ## 07. Part C. Cryptography foundations
 
-Taught as an engineer's toolkit: properties, correct use and failure modes, with just enough mathematics to make the guarantees believable. No implementing primitives for production.
+Taught as an engineer's toolkit: properties, correct use and failure modes, with just enough mathematics to make the guarantees believable.  
+No implementing primitives for production.
 
 ### H11. Symmetric crypto, hashes, MACs, AEAD
 
@@ -388,11 +389,11 @@ R2.2 gives the summary. This module goes to the frames (RFC 9113).
 | H03 | DNS                                             | Completed   |
 | H04 | TCP in depth                                    | Completed   |
 | H05 | Sockets and I/O models                          | Completed   |
-| H06 | HTTP/0.9 and HTTP/1.0                           | Not started |
-| H07 | HTTP/1.1 message syntax and framing             | Not started |
-| H08 | Connections, proxies and upgrades               | Not started |
-| H09 | Semantics bridge: negotiation, ranges, caching  | Not started |
-| H10 | State on a stateless protocol: cookies          | Not started |
+| H06 | HTTP/0.9 and HTTP/1.0                           | Completed   |
+| H07 | HTTP/1.1 message syntax and framing             | Completed   |
+| H08 | Connections, proxies and upgrades               | Completed   |
+| H09 | Semantics bridge: negotiation, ranges, caching  | Completed   |
+| H10 | State on a stateless protocol: cookies          | Completed   |
 | H11 | Symmetric crypto, hashes, MACs, AEAD            | Not started |
 | H12 | Public-key crypto and key exchange              | Not started |
 | H13 | Certificates and PKI                            | Not started |
