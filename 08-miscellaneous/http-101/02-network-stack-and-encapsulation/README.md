@@ -11,6 +11,8 @@
 
 # H02. The Network Stack and Encapsulation
 
+---
+
 ## Contents
 
 | #     | Sub-topic                                                | Tag   |

@@ -11,6 +11,8 @@
 
 # H08. Connections, proxies and upgrades2
 
+---
+
 ## Contents
 
 | #     | Sub-topic                                                                  | Tag   |

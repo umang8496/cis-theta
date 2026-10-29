@@ -11,6 +11,8 @@
 
 # H06. HTTP/0.9 and HTTP/1.0
 
+---
+
 ## Contents
 
 | #     | Sub-topic                                                     | Tag   |

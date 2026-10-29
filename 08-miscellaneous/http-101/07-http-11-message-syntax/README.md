@@ -11,6 +11,8 @@
 
 # H07. HTTP/1.1 message syntax and framing
 
+---
+
 ## Contents
 
 | #     | Sub-topic                                                   | Tag   |

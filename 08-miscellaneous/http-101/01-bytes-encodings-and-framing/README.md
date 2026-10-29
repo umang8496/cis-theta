@@ -11,6 +11,8 @@
 
 # H01. Bytes, Encodings and Framing
 
+---
+
 ## Contents
 
 | #     | Sub-topic                                                              | Tag  |
