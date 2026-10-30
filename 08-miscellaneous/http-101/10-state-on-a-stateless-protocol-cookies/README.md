@@ -5246,7 +5246,7 @@ Things to try:
 
 01. `PORT=9401 node drivers/attacks.js | sed 's/9401/9400/g' | diff - out/lab05_attacks.txt` prints nothing: the Rust shop gives the same matrix.
 
-02. In the driver's `tossing` function, remove `Domain=shop.localhost; ` from the planted `__Host-sid` string and rerun.  
+02. In the driver's `tossing` function, remove `Domain=shop.localhost;` from the planted `__Host-sid` string and rerun.  
   The browser accepts it, but as a cookie of `blog.shop.localhost` alone: the list shows `__Host-sid (blog.shop.localhost), __Host-sid (shop.localhost)`,  
   the victim's login on the shop works, and the attacker's id is `HTTP 401`. The prefix stops the planting, not the sibling's existence.
 
@@ -5313,7 +5313,7 @@ Run: `node drivers/thirdparty.js`.
 The driver launches the full Chromium build (`channel: 'chromium'`) and turns blocking on through the DevTools protocol command `Network.setCookieControls`,  
 the same setting as Chrome's "Block third-party cookies" switch.
 
-```
+```text
 == Chromium defaults  (153.0.8010.12) ==
 request to the shop                                   cookies sent
 iframe on evil.localhost, the shop sets wu and wp     [fp]
