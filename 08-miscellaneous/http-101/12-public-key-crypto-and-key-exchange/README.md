@@ -2624,8 +2624,4 @@ initial congestion window, 10 x 1460         14600 bytes
   Each failure in 12.09 is a *combination* error: a good exchange with no authentication, a good signature with a bad nonce, a good KEM with a weak partner or none.  
   The practical rule is the one from H11, with more force: use TLS from a maintained library, and do not assemble your own.
 
-- Next: **H13** answers the question this module left open: how a client knows that the public key in front of it belongs to the server it meant to reach.  
-  Certificates, authorities, chains and revocation.  
-  H14 and H15 then build TLS 1.3 out of every piece so far.
-
 ---
