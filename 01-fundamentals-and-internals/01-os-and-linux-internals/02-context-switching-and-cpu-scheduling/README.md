@@ -10,381 +10,744 @@
 
 # 02 — Context Switching and CPU Scheduling
 
-## 1. First Principles: What Is a Context Switch?
+---
 
-### 1.1 The "Single Workbench" Analogy
+## Table of contents
 
-Imagine a master carpenter working at a single physical workbench (a **CPU Core**).  
-The carpenter is building two projects at the same time: a **Wooden Chair (Task A)** and a **Jewelry Box (Task B)**.  
-
-Because there is only one workbench, the carpenter cannot saw wood for the chair and carve hinges for the jewelry box at the exact same instant.  
-To make progress on both:
-
-1. The carpenter works on the **Chair (Task A)** for 10 minutes.
-2. A timer rings.  
-  Before clearing the workbench, the carpenter takes a Polaroid photo and writes down the exact measurements, which screw was half-tightened, and which step of the blueprint they were on.  
-  This saved snapshot is **Task A's Context**.
-3. The carpenter sweeps all of Task A's tools and wood pieces off the workbench into Storage Bin A (RAM), pulls Task B's tools and blueprint out of Storage Bin B,  
-  arranges them on the workbench according to Task B's saved notes, and resumes working on the **Jewelry Box (Task B)**.
-
-In an operating system:
-
-* **The "Context"** is the minimum set of hardware state required to pause a running task at any instruction and resume it later as if nothing happened;
-  Its **CPU Registers** (including the Instruction Pointer `RIP` and Stack Pointer `RSP`), its **Floating-Point/SIMD registers**, and its **Virtual Memory Page Table pointer (`CR3`)**.
-
-* **A Context Switch** is the physical procedure performed by the OS Kernel to stop running Task A on a CPU core, save Task A's hardware context into Kernel RAM,  
-  load Task B's saved hardware context into the CPU core, and jump to Task B's instruction pointer.
-
-### 1.2 Clearing Up the #1 Interview Misconception: Mode Switch vs. Context Switch
-
-Many engineers confuse a **Mode Switch** (User Mode $\leftrightarrow$ Kernel Mode) with a **Context Switch** (Task A $\leftrightarrow$ Task B).  
-In a Staff/Architect interview, keeping these distinct is critical:
-
-* **A Mode Switch (Privilege Ring Transition: Ring 3 $\leftrightarrow$ Ring 0):**
-
-  * Happens whenever your application makes a system call (like `getpid()` or reading data already sitting in the OS Page Cache) or when a fast hardware interrupt fires.
-  * The CPU flips its privilege bit from **Ring 3 (User)** to **Ring 0 (Kernel)** and switches from Task A's User Stack to Task A's Kernel Stack.
-
-* **Crucial point:** **Task A is still the active task!**  
-  The Kernel does quick work on behalf of Task A and returns right back to Task A in Ring 3.  
-  No other process or thread was scheduled. Cost: **~50 to 200 nanoseconds**.
-
-* **A Context Switch (Task Switch: Task A $\rightarrow$ Task B):**
-
-  * Can **only happen inside Ring 0** (so every Context Switch begins with a Mode Switch into the Kernel).
-  * Once inside Ring 0, the Kernel decides Task A cannot continue (either because Task A blocked waiting for disk/network I/O, or because Task A's time slice expired).
-  * The Kernel invokes the **Scheduler**, picks a completely different runnable task (**Task B**), swaps out the CPU state and memory mappings, and returns to Ring 3 running **Task B**.  
-    Cost: **~1,000 to 10,000+ nanoseconds** (when accounting for CPU cache and TLB warmup).
-
-```mermaid
-flowchart TB
-    subgraph ModeSwitch ["1. Mode Switch ONLY (Fast: ~100 ns — Task A Keeps the CPU)"]
-        direction LR
-        M1["Task A (Ring 3)<br/>Calls read()"] ==>|"SYSCALL Trap"| M2["Kernel (Ring 0)<br/>Data already in RAM Page Cache!"]
-        M2 ==>|"SYSRET Return"| M3["Task A (Ring 3)<br/>Continues immediately"]
-    end
-
-    subgraph ContextSwitch ["2. Mode Switch + Context Switch (Slow: ~2,000+ ns — CPU Switches to Task B)"]
-        direction LR
-        C1["Task A (Ring 3)<br/>Calls read()"] ==>|"SYSCALL Trap"| C2["Kernel (Ring 0)<br/>Data NOT in RAM (Must wait on SSD)"]
-        C2 ==>|"Marks Task A Sleeping<br/>Calls schedule()"| C3["Kernel Context Switcher<br/>Saves Task A State -> Loads Task B State"]
-        C3 ==>|"SYSRET Return"| C4["Task B (Ring 3)<br/>Runs on CPU Core!"]
-    end
-```
-
-### 1.3 Voluntary vs. Involuntary Context Switches
-
-Linux tracks two categories of context switches for every thread (visible in `/proc/<pid>/status` and `pidstat -w`):
-
-| Switch Type                    | Linux Metric Name             | Trigger Mechanism                                                                                                                                                                 | What High Numbers Mean in Production                                                                                   |
-| :----------------------------- | :---------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------- |
-| **Voluntary Context Switch**   | `voluntary_ctxt_switches`     | The task **willingly yields** the CPU because it cannot proceed—e.g., waiting for a network socket (`read`), disk I/O, `sleep()`, or waiting on a contended `mutex` lock.         | Your application is **I/O-bound** or suffering from **heavy lock contention** (threads constantly parking on mutexes). |
-| **Involuntary Context Switch** | `nonvoluntary_ctxt_switches`  | The task still wanted to run CPU instructions, but the OS Kernel **forcibly preempted** it because its time slice expired or a higher-priority thread woke up.                    | Your server is **CPU-oversubscribed**—too many active runnable threads fighting over too few physical CPU cores.       |
+01. [Mental model](#1-mental-model)
+02. [Task states and why a task leaves the CPU](#2-task-states-and-why-a-task-leaves-the-cpu)
+03. [The switch path: `__schedule()` → `switch_to`](#3-the-switch-path-__schedule--switch_to)
+04. [What a switch costs](#4-what-a-switch-costs)
+05. [Preemption: when the kernel is allowed to switch](#5-preemption-when-the-kernel-is-allowed-to-switch)
+06. [Scheduling classes](#6-scheduling-classes)
+07. [The fair class: from CFS to EEVDF](#7-the-fair-class-from-cfs-to-eevdf)
+08. [Weights, nice and autogroup](#8-weights-nice-and-autogroup)
+09. [PELT: load and utilisation tracking](#9-pelt-load-and-utilisation-tracking)
+10. [Multi-CPU: runqueues, wakeup placement, load balancing](#10-multi-cpu-runqueues-wakeup-placement-load-balancing)
+11. [Real-time and deadline scheduling](#11-real-time-and-deadline-scheduling)
+12. [cgroups: weights, quotas and throttling](#12-cgroups-weights-quotas-and-throttling)
+13. [Idle, ticks and CPU isolation](#13-idle-ticks-and-cpu-isolation)
+14. [sched_ext: BPF schedulers](#14-sched_ext-bpf-schedulers)
+15. [Measured numbers](#15-measured-numbers)
+16. [Tuning playbook](#16-tuning-playbook)
+17. [Observation cheat sheet](#17-observation-cheat-sheet)
 
 ---
 
-## 2. Step-by-Step Anatomy of a Context Switch in Linux
+## 1. Mental model
 
-What actually happens inside the CPU silicon and the Linux kernel (`kernel/sched/core.c`) when the OS switches from **Task A** to **Task B**?
-
-Remember from Topic 01 that every OS thread actually has **two stacks**:
-
-1. **A User Stack (1–8 MB in User Space, Ring 3):** Used while running your application code.
-2. **A Kernel Stack (8 KB or 16 KB in Kernel Space, Ring 0):** Used whenever that specific thread enters the Kernel via a syscall or interrupt.
-
-Here is the exact 6-step sequence of a context switch:
+Each CPU owns a **runqueue** (`struct rq`).  
+A task is either running on exactly one CPU, queued on exactly one runqueue, or sleeping on some wait queue.  
+The scheduler is not a thread; it is a function, `__schedule()`, that runs *in the context of the task giving up the CPU* whenever that task blocks, is preempted, or yields.  
+It asks each **scheduling class** in priority order for a task to run, then performs the **context switch**: swap address space (if different),  
+swap kernel stack and registers, and return into the other task.
 
 ```mermaid
-sequenceDiagram
-    autonumber
-    participant AppA as Task A (User Space)
-    participant KernA as Task A's Kernel Stack (Ring 0)
-    participant Sched as Linux Kernel context_switch()
-    participant KernB as Task B's Kernel Stack (Ring 0)
-    participant AppB as Task B (User Space)
-
-    AppA->>KernA: 1. Timer Interrupt or Blocking Syscall traps CPU to Ring 0
-    Note over KernA: 2. Hardware + Kernel Entry saves Task A's User Registers<br/>(RIP, RSP, RAX..R15) into struct pt_regs at top of Task A's Kernel Stack
-    KernA->>Sched: 3. Calls __schedule() -> Picks Task B from Red-Black Tree
-    Note over Sched: 4. Calls switch_mm_irqs_off():<br/>If Task B is in a DIFFERENT Process, loads Task B's Page Table into CR3!<br/>(Skipped if Task A & Task B are threads of the SAME process)
-    Sched->>KernB: 5. Calls switch_to(Task A, Task B):<br/>Saves Task A's Kernel RSP into A->thread.sp<br/>Loads Task B's Kernel RSP from B->thread.sp!
-    Note over KernB: Now executing on Task B's Kernel Stack!<br/>Pops Task B's saved pt_regs (from when B was paused earlier)
-    KernB->>AppB: 6. Returns to Ring 3 (IRET / SYSRET) -> Task B resumes seamlessly!
+flowchart LR
+    subgraph CPU0["CPU 0"]
+        R0["rq: curr = A<br/>dl / rt / cfs / scx / idle sub-queues"]
+    end
+    subgraph CPU1["CPU 1"]
+        R1["rq: curr = C"]
+    end
+    W["wait queues<br/>(futex, socket, pipe, disk I/O)"]
+    A((A)) -- "blocks: dequeue, schedule()" --> W
+    W -- "wake_up: select CPU, enqueue,<br/>maybe preempt curr" --> R1
+    R0 <-- "load balance: migrate" --> R1
 ```
 
-### Deep Dive into Step 4 & Step 5 (`context_switch()`)
+Three separate questions, three separate costs:
 
-Inside the Linux kernel, the function `context_switch(rq, prev, next)` performs two critical hardware operations:
-
-1. **Switching the Virtual Address Space (`switch_mm_irqs_off`):**
-
-* The CPU has a privileged control register called **`CR3`** (on x86-64) or **`TTBR0`** (on ARM64) that holds the physical RAM address of the currently active Page Table.
-* **Case 1 (Process A $\rightarrow$ Process B):** Because Process B has a completely different Virtual Address Space (`mm_struct`), the kernel overwrites `CR3` with Process B's Page Table address.
-* **Case 2 (Thread A1 $\rightarrow$ Thread A2 in the same Process):** Because both threads share the exact same `mm_struct`, the kernel **skips reloading `CR3` completely**.
-* **Case 3 (User Thread $\rightarrow$ Kernel Background Thread like `kworker`):** Kernel threads only touch Kernel Space (which is identically mapped in the upper half of every process's page table!). Linux uses a clever optimization called **Lazy TLB Mode**: the kernel thread simply "borrows" the previous user process's `CR3` without reloading it at all!
-
-2. **Switching the Execution Thread & Registers (`switch_to`):**
-
-* First, the kernel saves any hardware state belonging to Task A that wasn't already pushed onto its stack: Thread-Local Storage (TLS) segment registers (`FS` / `GS` base registers) and Floating-Point / AVX-512 SIMD vector registers (`fpu` state).
-* Finally, in a tiny block of inline assembly (`__switch_to_asm`), the CPU executes the ultimate magic trick:
-* It saves the current CPU Stack Pointer (`RSP`, which points to Task A's Kernel Stack) into `prev->thread.sp`.
-* It overwrites the CPU's `RSP` register with `next->thread.sp` (which points to Task B's Kernel Stack).
-* The instant `RSP` changes, **the CPU is now operating inside Task B's universe**.  
-  When the function returns (`RET`), it pops the return instruction address off *Task B's* stack—resuming Task B right where Task B called `schedule()` milliseconds ago!
+| Question                         | Mechanism                                                         | Cost domain                |
+| -------------------------------- | ----------------------------------------------------------------- | -------------------------- |
+| *When* does a switch happen?     | blocking, tick, wakeup preemption, yield, preemption model        | latency                    |
+| *Which* task runs next?          | class order, EEVDF eligibility/deadline, RT priority, DL deadline | fairness, latency          |
+| *Where* does it run?             | wakeup CPU selection, load balancing, affinity, cgroups/cpusets   | cache locality, throughput |
+| *How much* does the switch cost? | register/stack/mm swap, mitigations, cache/TLB refill             | throughput                 |
 
 ---
 
-## 3. Direct vs. Indirect Costs: TLB Flushes, PCID, and TLB Shootdowns
+## 2. Task states and why a task leaves the CPU
 
-If a raw register swap (`switch_to`) only takes ~100 to 300 nanoseconds, why do systems architects fear context switch storms?
+```mermaid
+stateDiagram-v2
+    [*] --> RUNNABLE: fork / wake_up_new_task
+    RUNNABLE --> RUNNING: picked by __schedule()
+    RUNNING --> RUNNABLE: preempted (involuntary) or sched_yield
+    RUNNING --> INTERRUPTIBLE: wait (S) - signal can wake
+    RUNNING --> UNINTERRUPTIBLE: wait (D) - e.g. disk I/O, some locks
+    RUNNING --> STOPPED: SIGSTOP / ptrace (T, t)
+    INTERRUPTIBLE --> RUNNABLE: try_to_wake_up()
+    UNINTERRUPTIBLE --> RUNNABLE: try_to_wake_up()
+    STOPPED --> RUNNABLE: SIGCONT
+    RUNNING --> ZOMBIE: do_exit (Z)
+    ZOMBIE --> [*]: reaped by parent wait()
+```
 
-Because the **Direct Cost** of a context switch is tiny compared to the **Indirect Cost (Cache & TLB Pollution)**.
+`ps` STAT letters: `R` (running *or* runnable, the kernel does not distinguish in `ps`), `S` (`TASK_INTERRUPTIBLE`), `D` (`TASK_UNINTERRUPTIBLE`;  
+counts toward load average on Linux), `I` (idle kernel thread, `TASK_IDLE` = D without load contribution), `T`/`t`, `Z`.
 
-| Cost Category     | Component Affected                            | Latency Penalty          | Why It Happens                                                                                                                                                                                       |
-| :---------------- | :-------------------------------------------- | :----------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Direct Cost**   | Ring 0 Trap + Register Save/Restore + CFS     | **~200 ns – 800 ns**     | Saving general-purpose registers, FPU/AVX state, running the scheduler algorithm, and updating kernel bookkeeping.                                                                                   |
-| **Indirect Cost** | **L1 / L2 / L3 CPU Data & Instruction Caches**| **~1,000 ns – 10,000 ns**| Task A had filled the ultra-fast L1 cache (1 ns access) with its hot variables. Task B touches completely different memory, evicting Task A's cache lines and stalling on slow 100 ns RAM fetches.   |
-| **Indirect Cost** | **TLB (Translation Lookaside Buffer)**        | **~500 ns – 5,000 ns**   | If `CR3` changed without PCID (or entries were evicted), virtual-to-physical address translations miss in the TLB, forcing slow 4-level Page Table walks in RAM.                                     |
+### 2.1 Voluntary vs involuntary switches
 
-### 3.1 How PCID (Process-Context Identifiers) Saved Modern CPUs
+| Kind            | Cause                                                                                                                                        | Counter                                                                      |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| **Voluntary**   | task sleeps: `futex_wait`, `read` on empty socket, `nanosleep`, page fault needing I/O, mutex contention, `epoll_wait`                       | `voluntary_ctxt_switches` in `/proc/<pid>/status`, `cswch/s` in `pidstat -w` |
+| **Involuntary** | task still runnable but taken off CPU: slice exhausted at tick, wakeup preemption by a better task, migration, higher class becomes runnable | `nonvoluntary_ctxt_switches`, `nvcswch/s`                                    |
 
-Historically, every time the CPU wrote a new Page Table address into the `CR3` register (switching from Process A to Process B), the CPU hardware **flushed the entire TLB cache** on that core. Why? Because virtual address `0x4000` in Process A points to a different physical RAM frame than `0x4000` in Process B; without flushing, Process B would read Process A's memory!
+Interpretation:
 
-To fix this bottleneck, Intel (Westmere+) and ARM introduced **PCID (Process-Context Identifiers)** (called **ASID** on ARM):
+- High **voluntary** rate: the workload blocks a lot (lock contention, small I/O, chatty threads). Fix the blocking pattern, batch, or use fewer handoffs.
+- High **involuntary** rate: CPU oversubscription. More runnable tasks than CPUs (check `r` in `vmstat`, PSI `cpu some`). Fix by fewer threads, more CPUs, or priorities.
 
-* The CPU adds a small **12-bit tag (Process ID tag)** to every entry cached inside the TLB hardware.
-* Instead of `[Virtual Address 0x4000 -> Physical Frame 0x991000]`, the TLB entry now stores **`[PCID: 7 | Virtual Address 0x4000 -> Physical Frame 0x991000]`**.
-* When the Linux Kernel switches from Process A (`PCID 7`) to Process B (`PCID 12`), it sets a bit in `CR3` telling the CPU: *"Do NOT flush the TLB! Just only match TLB entries tagged with PCID 12."*  
-  If Process A gets scheduled back onto that core a millisecond later, its `PCID 7` translations are still warm inside the TLB!
+`sched_yield()` counts as voluntary in the kernel's own accounting.  
+A yield with nobody else runnable is just a syscall plus a pass through `__schedule()` returning to the same task (measured 276 ns vs 139 ns for a trivial syscall, §15).
 
-### 3.2 TLB Shootdowns: The Silent Multi-Core Killer
+---
 
-Even with PCID, there is a notorious multi-core bottleneck that comes up in Staff/Architect interviews: **The TLB Shootdown**.
+## 3. The switch path: `__schedule()` → `switch_to`
 
-#### Why Do TLB Shootdowns Happen?
+### 3.1 Entry points
 
-Remember that inside a single multi-threaded process (like a Java JVM, Go service, or PostgreSQL), **all threads share the exact same Virtual Address Space (`mm_struct`)**.  
-Suppose your Java application is running 4 threads simultaneously across **4 physical CPU cores (Core 0, Core 1, Core 2, Core 3)**.  
+```mermaid
+flowchart TD
+    A["blocking call<br/>set_current_state(TASK_INTERRUPTIBLE)<br/>schedule()"] --> S
+    B["return to user / from IRQ<br/>with TIF_NEED_RESCHED set"] --> S
+    C["preempt_enable() / cond_resched()<br/>(kernel preemption points)"] --> S
+    D["sched_yield()"] --> S
+    S["__schedule(sched_mode)"] --> E["rq_lock(rq), update_rq_clock()"]
+    E --> F{"prev->__state != RUNNING<br/>and not preempted?"}
+    F -- yes --> G["deactivate_task(prev)<br/>(dequeue, with DELAY_DEQUEUE<br/>may stay queued until lag ≥ 0)"]
+    F -- no --> H["prev stays on rq"]
+    G & H --> I["next = pick_next_task(rq, prev)<br/>class by class: stop, dl, rt, fair, ext, idle"]
+    I --> J{"next == prev?"}
+    J -- yes --> K["clear need_resched, unlock, return<br/>(no switch)"]
+    J -- no --> L["context_switch(rq, prev, next)"]
+```
 
-1. All 4 cores have cached the virtual-to-physical translation for Virtual Page `0x5000` inside their private, per-core hardware **L1 TLB caches**.
-2. Suddenly, the thread running on **Core 0** frees that memory back to the OS (`munmap()`), changes its permissions (`mprotect()`), or the JVM Garbage Collector uncommits a heap region.
-3. **Core 0** updates the shared Page Table in RAM and flushes its *own* local TLB using the `INVLPG` instruction.
-4. **The Danger:** **Cores 1, 2, and 3 STILL have the old, stale translation for `0x5000` cached inside their hardware TLBs!**  
-  Their hardware MMUs do not automatically snoop changes to RAM page tables. If Core 1 writes to `0x5000` right now, it will corrupt freed physical memory!
+`TIF_NEED_RESCHED` is a flag; setting it (e.g. in `wakeup_preempt()` or the tick) does not switch anything.  
+The switch happens at the next **preemption point** that checks the flag: return to user mode, return from interrupt (if kernel preemption is enabled),  
+or an explicit `cond_resched()`/`preempt_enable()`.
 
-#### How the Kernel Executes a TLB Shootdown
-
-To prevent memory corruption, **Core 0** must forcibly interrupt Cores 1, 2, and 3 before `munmap()` is allowed to return:
+### 3.2 `context_switch()` internals (x86_64)
 
 ```mermaid
 sequenceDiagram
-    autonumber
-    participant C0 as CPU Core 0 (Caller Thread)
-    participant PT as Shared Page Table in RAM
-    participant APIC as Hardware Inter-Processor Interrupt (IPI) Bus
-    participant C123 as CPU Cores 1, 2, and 3 (Sibling Threads)
-
-    Note over C0,C123: All 4 Cores have Virtual Page 0x5000 cached in their local L1 TLBs
-    C0->>PT: 1. Thread on Core 0 calls munmap(0x5000)<br/>Kernel unmaps entry in RAM Page Table & flushes Core 0's local TLB
-    C0->>APIC: 2. Core 0 sends an IPI (Inter-Processor Interrupt) to Cores 1, 2, and 3
-    Note over C0: 3. Core 0 SPINS & WAITS (Blocked!) until all cores acknowledge
-    APIC->>C123: 4. Hardware IPI forces Cores 1, 2, and 3 to pause user code & trap to Ring 0!
-    Note over C123: 5. Cores 1, 2, and 3 execute INVLPG(0x5000) to flush their local TLBs
-    C123-->>C0: 6. Cores 1, 2, and 3 send IPI Acknowledgment back to Core 0
-    Note over C0: 7. Core 0 unblocks and returns from munmap()!
+    participant S as __schedule
+    participant CS as context_switch
+    participant MM as switch_mm_irqs_off
+    participant ST as __switch_to_asm / __switch_to
+    participant F as finish_task_switch
+    S->>CS: prev, next
+    CS->>CS: prepare_task_switch (perf, kcov, rseq notify)
+    alt next->mm == NULL (kernel thread)
+        CS->>CS: enter_lazy_tlb, borrow prev->active_mm, no CR3 write
+    else user task, different mm
+        CS->>MM: switch address space
+        MM->>MM: pick ASID (PCID) for next mm, write CR3 (no flush if ASID still valid)
+        MM->>MM: conditional IBPB (if switching to a task that opted into protection)
+        MM->>MM: update mm_cpumask for TLB shootdowns
+    else same mm (thread of same process)
+        CS->>CS: skip CR3 write entirely
+    end
+    CS->>ST: switch_to(prev, next, prev)
+    ST->>ST: push callee-saved regs, save rsp in prev->thread.sp
+    ST->>ST: load next->thread.sp (now on next's kernel stack)
+    ST->>ST: stack canary swap, RSB stuffing (Spectre-RSB)
+    ST->>ST: FPU: mark next TIF_NEED_FPU_LOAD (restored lazily on return to user)
+    ST->>ST: load FS/GS base (TLS), update per-CPU current_task, top-of-stack
+    ST->>F: return on next's stack
+    F->>F: drop prev's mm reference (if lazy), put dead task, unlock rq
+    F-->>S: next continues where it called schedule() earlier
 ```
 
-> **Why Architects Care About TLB Shootdowns:**  
-> Notice the devastating impact: a single `munmap()` or `mprotect()` on **Core 0** forces **every other core running threads of that process** to stop running user code,  
-trap into Ring 0, flush their TLB, and acknowledge—while Core 0 spins doing nothing!
-> On a 64-core or 128-core server, calling standard `malloc`/`free` (which calls `mmap`/`munmap` for large blocks) at high frequency can burn **30%+ of total CPU time** purely in kernel TLB shootdown IPI storms (`smp_call_function_many` in `perf top`).
-> **Architectural Fix:** This is why high-performance allocators like **`jemalloc`** and **`tcmalloc`** (and custom database buffer pools) retain freed memory in user-space arenas or use deferred batched reclamation (`MADV_FREE`) rather than returning pages to the OS kernel on every `free()`.
+Key points:
+
+- **Every task resumes inside `__schedule()`**: the task that is switched *in* returns from its own earlier call to `switch_to`, so from the C code's point of view `switch_to(prev, next, prev)` returns "in another task". The third argument fixes up `prev` so the resumed task knows who ran before it.
+- **Thread switch vs process switch**: same `mm` ⇒ no CR3 write, no IBPB, TLB entries remain valid. This is the main direct-cost difference between switching threads of one process and switching processes.
+- **PCID/ASID**: x86 has 12-bit PCIDs; Linux uses a small per-CPU set of dynamic ASIDs (6 by default) and tags TLB entries with them. Switching back to a recently run `mm` on that CPU keeps its TLB entries. With KPTI each mm uses two PCIDs (user and kernel page tables).
+- **FPU state**: AVX-512/AMX state can be several KiB. Since 5.2 the FPU is saved eagerly on switch-out (XSAVES with init/modified optimisations) but *restored lazily* on return to user space, so a task that switches in, runs only in kernel mode and blocks again never pays the restore.
+- **`rseq`**: the switch marks the task's restartable sequence for abort, enabling per-CPU user-space data structures (glibc uses rseq for `sched_getcpu()` without a syscall).
+
+### 3.3 Kernel stacks make it simple
+
+Each task has its own kernel stack (16 KiB).  
+All register state of a sleeping task lives on its kernel stack plus `thread_struct`; switching is "save `rsp`, load other `rsp`".  
+The user-mode registers were already saved on the kernel stack at syscall/interrupt entry (`pt_regs`), so `switch_to` only deals with callee-saved kernel registers.
 
 ---
 
-## 4. CPU Scheduling: From First Principles to Linux CFS & EEVDF
+## 4. What a switch costs
 
-Now that we know *how* the kernel switches tasks, we must answer the brain of the operation:  
-**When there are 50 runnable threads waiting for an 8-core CPU, how does the Kernel decide WHICH thread runs next, and for HOW LONG?**
+### 4.1 Direct cost
 
-### 4.1 The Fundamental Scheduler Dilemma: Throughput vs. Latency
+The direct cost is the CPU time between the old task's last instruction and the new task's first useful instruction:
 
-Every OS scheduler is trapped in a tug-of-war between two conflicting goals:
+| Component                                                                | Order of magnitude                               |
+| ------------------------------------------------------------------------ | ------------------------------------------------ |
+| Syscall entry/exit that triggered the block (with mitigations)           | 50–150 ns each                                   |
+| `__schedule()` bookkeeping: rq lock, clock update, dequeue/enqueue, pick | 100–300 ns                                       |
+| `switch_mm` (CR3 write, PCID management, optional IBPB)                  | 50–200 ns, IBPB alone can be ~1 µs+ on some CPUs |
+| Register/stack swap, FS base, FPU save                                   | 20–100 ns (FPU size dependent)                   |
+| Wakeup side: `try_to_wake_up`, select CPU, enqueue, maybe IPI            | 100–500 ns same CPU; **µs** cross CPU            |
 
-1. **Maximize Throughput (Batch Processing Goal):** Since every context switch wastes CPU cycles and ruins L1/L2 caches, if you want to finish a massive video encoding job as fast as possible, you should give each task a **huge time slice (e.g., 100 ms)** so it rarely context-switches.
-2. **Minimize Response Latency (Interactive Goal):** If a user clicks their mouse, or a high-priority network packet arrives for your API server, waiting 100 ms behind a video encoder feels broken.  
-  Interactive tasks want **tiny time slices (e.g., 1 ms)** and immediate preemption so every task gets a turn rapidly.
+Measured on the test VM (§15): futex ping-pong between two threads pinned to **one** CPU = **3.2 µs per round trip ≈ 1.6 µs per switch** including all syscalls and wakeups.  
+On modern bare metal the same test typically lands at ~1–2 µs per round trip.
 
-### 4.2 Brief Evolution of Linux Schedulers
+### 4.2 Cross-CPU wakeups
 
-To appreciate why Linux works the way it does today, look at how its scheduler evolved:
+When the wakee runs on a different CPU, the waker must place it on a remote runqueue and, if that CPU is idle, send an **IPI** (or rely on the remote CPU polling in `TIF_POLLING_NRFLAG` idle).  
+The remote CPU then has to exit its idle state:
 
-| Era & Scheduler Name                                   | Core Data Structure & Algorithm                                                                                              | Why It Was Replaced                                                                                                                     |
-| :----------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------- |
-| **Linux 2.4: $O(N)$ Scheduler**                        | Single global linked list of all tasks. Iterated over all $N$ tasks to score the best one.                                   | Took $O(N)$ time and held a global lock. With 10,000 threads, the kernel spent more time scheduling than running!                       |
-| **Linux 2.6.0: $O(1)$ Scheduler**                      | Two priority arrays (`active` & `expired`) of 140 queues with bitmaps. Picked next task in $O(1)$.                           | Used complex fragile heuristics to guess if a thread was "interactive" vs. "batch," leading to unfair starvation bugs.                  |
-| **Linux 2.6.23 – 6.5: CFS (Completely Fair Scheduler)**| Per-CPU **Red-Black Tree** ordered by **Virtual Runtime (`vruntime`)**. Pick next in $O(1)$, insert in $O(\log N)$.          | Eliminated brittle heuristics using pure proportional-share fairness math. The industry standard for 16+ years.                         |
-| **Linux 6.6+: EEVDF Scheduler**                        | Retains CFS's **Red-Black Tree** & **`vruntime`**, adding **Virtual Deadlines** (Earliest Eligible Virtual Deadline First).  | Solves a subtle flaw in CFS: latency-sensitive tasks with small CPU needs no longer have to wait behind bulky tasks of equal `vruntime`.|
+| Idle state            | Typical exit latency |
+| --------------------- | -------------------- |
+| C1 / polling          | < 1–2 µs             |
+| C1E                   | a few µs             |
+| C6 (core power-gated) | 50–150 µs            |
 
-### 4.3 Deep Dive: How the Linux Completely Fair Scheduler (CFS) Works
+Measured: same ping-pong across CPUs = **24.7 µs per round trip** in the VM, 7.7× the same-CPU figure (virtual IPIs exit to the hypervisor).  
+This is the mechanism behind the "cross-carrier handoff is 20–90× slower" observation in topic 01 for Java virtual threads and Tokio.
 
-Designed by Ingo Molnar, **CFS** threw away traditional fixed time-slice queues and started from a simple mathematical ideal: **The "Ideal Multi-Tasking CPU."**
+### 4.3 Indirect cost: cache and TLB pollution
 
-#### 1. The Concept of an "Ideal Multi-Tasking CPU"
+After a switch the new task finds L1/L2 (and possibly L3/TLB) filled with the previous task's data.  
+The cost depends on the working sets of *both* tasks relative to cache sizes.  
+Measured with two tasks pinned to one CPU, each touching a working set `WS` between switches (CPU: Xeon @ 2.1 GHz, 48 KiB L1d, 2 MiB L2 per core):
 
-On a theoretical, physically impossible "Ideal CPU," if you have **4 runnable tasks** on 1 core, the CPU would run all 4 tasks simultaneously at **exact $\frac{1}{4}$ (25%) speed**.  
-In a 20 ms window, every single task would receive exactly **5 ms** of CPU time simultaneously.
+| WS per task | Round trip | Pure touch cost (no switch) | Switch overhead per switch |
+| ----------- | ---------- | --------------------------- | -------------------------- |
+| 16 KiB      | 4.0 µs     | 0.6 µs                      | **1.7 µs**                 |
+| 64 KiB      | 6.1 µs     | 3.1 µs                      | **1.5 µs**                 |
+| 256 KiB     | 15.1 µs    | 12.1 µs                     | **1.5 µs**                 |
+| 1 MiB       | 63.0 µs    | 47.4 µs                     | **7.8 µs**                 |
+| 4 MiB       | 349 µs     | 338 µs                      | **5.6 µs**                 |
+| 16 MiB      | 1388 µs    | 1370 µs                     | **8.9 µs**                 |
 
-On a real physical CPU core, only 1 task can run at a time.  
-So while Task A runs for 5 ms, Tasks B, C, and D receive **0 ms**—meaning Tasks B, C, and D are temporarily being treated **unfairly**.
-
-**CFS's Core Rule:** Track the exact nanosecond amount of CPU time every task has received so far (called its **Virtual Runtime**, or **`vruntime`**).  
-Whenever it is time to pick the next task to run, **always pick the task with the smallest `vruntime**` (the task that has been most "deprived" of CPU time)!
-
-#### 2. How Priorities (`nice` values) Work Without Priority Queues
-
-In Linux, every process has a **`nice` value** ranging from **`-20` (highest priority — "least nice" to others)** to **`+19` (lowest priority — "nicest" to others)**, with **`0` as the default**.
-
-How does CFS support priorities if it always just picks the task with the lowest `vruntime`?
-By making **`vruntime` tick at different speeds** depending on the task's priority weight!
-
-$$\Delta \text{vruntime} = \Delta \text{actual\_runtime} \times \frac{\text{WEIGHT\_NICE\_0 } (1024)}{\text{Task Weight}}$$
-
-* Every step of `1` in `nice` value changes a task's CPU share by roughly **10%** ( translating to a multiplier factor of $1.25\times$ per nice level).
-* Look at what happens when two tasks each run for **10 milliseconds of real physical wall-clock time**:
-* **Default Task (`nice = 0`, Weight = `1024`):** Its `vruntime` increases by $10\text{ ms} \times \frac{1024}{1024} = \mathbf{10\text{ ms}}$.
-* **High-Priority Task (`nice = -5`, Weight = `3121`):** Its `vruntime` increases by $10\text{ ms} \times \frac{1024}{3121} = \mathbf{3.28\text{ ms}}$! Because its virtual clock ticks **3x slower**, the scheduler thinks it has barely used the CPU and keeps picking it **3x more often**!
-* **Low-Priority Task (`nice = +5`, Weight = `335`):** Its `vruntime` increases by $10\text{ ms} \times \frac{1024}{335} = \mathbf{30.5\text{ ms}}$! Its virtual clock ticks **3x faster**, so it quickly moves to the right side of the tree and yields to others.
-
-#### 3. The CFS Red-Black Tree (`rb_root_cached`)
-
-Inside every CPU core's runqueue, CFS stores all currently **Runnable** tasks inside a self-balancing **Red-Black Tree** ordered by `vruntime`:
+Read: while both working sets fit in L2 together (2 × 256 KiB < 2 MiB), the switch costs only its direct ~1.5 µs.  
+Once the combined working set exceeds L2 (2 × 1 MiB = L2 size), each switch also forces ~5–7 µs of refills from L3.  
+The **indirect cost exceeded the direct cost by 4–5×**.  
+On workloads with large hot data (databases, JVM heaps) indirect cost dominates; this is the empirical case for: fewer runnable threads than cores,  
+CPU affinity for hot threads, longer slices for batch work, and thread-per-core designs.
 
 ```mermaid
-flowchart TB
-    subgraph CFS_Tree ["Per-Core CFS Runqueue (Self-Balancing Red-Black Tree Keyed by vruntime)"]
-        direction TB
-        Root["Task C<br/>vruntime = 45 ms<br/>(Black)"]
-        L1["Task B<br/>vruntime = 32 ms<br/>(Red)"]
-        R1["Task E<br/>vruntime = 60 ms<br/>(Red)"]
-        LL["Task A (LEFTMOST)<br/>vruntime = 18 ms<br/>(Black)"]
-        LR["Task D<br/>vruntime = 39 ms<br/>(Black)"]
-        RL["Task F<br/>vruntime = 51 ms<br/>(Black)"]
-        RR["Task G<br/>vruntime = 88 ms<br/>(Black)"]
-
-        Root --> L1
-        Root --> R1
-        L1 --> LL
-        L1 --> LR
-        R1 --> RL
-        R1 --> RR
-    end
-
-    Pointer["Cached Pointer: rb_leftmost — O(1) Instant Lookup!"] ==>|"Next Task to Run on CPU"| LL
-    NoteRight["Tasks that just ran get higher vruntime<br/>and re-insert toward the RIGHT — O(log N)"] -.-> RR
+xychart-beta
+    title "Per-switch overhead vs working set per task (µs, measured)"
+    x-axis ["16K", "64K", "256K", "1M", "4M", "16M"]
+    y-axis "µs per switch" 0 --> 10
+    bar [1.7, 1.5, 1.5, 7.8, 5.6, 8.9]
 ```
 
-* **Picking the next task is $O(1)$:** Even though finding the minimum node in a binary search tree normally takes $O(\log N)$ steps down the left branch, Linux caches a direct pointer to the leftmost node (`rb_leftmost`).  
-  The scheduler grabs the next task in **$O(1)$ constant time**!
-* **Updating a task is $O(\log N)$:** While the chosen task runs on the CPU, its `vruntime` increases. When its time slice expires (or it yields), it is reinserted further to the **right** of the Red-Black Tree in $O(\log N)$ time, and the new leftmost node takes over the CPU.
-* **What happens when a sleeping I/O task wakes up?** Suppose a web server thread slept for 10 seconds waiting on a request, while CPU-bound threads advanced the tree's minimum `min_vruntime` to `10,000,000 ns`.  
-  If the waking thread kept its old `vruntime = 500 ns`, it would monopolize the CPU for the next 10 seconds to "catch up"!  
-  To prevent this, CFS sets a waking task's `vruntime` to **`max(task.vruntime, min_vruntime - sleeper_bonus)`**—giving it a slight head start so interactive I/O tasks run immediately, without letting it starve everyone else.
+### 4.4 Mitigation tax
 
-#### 4. How CFS Calculates Dynamic Time Slices (`sched_latency` vs. `sched_min_granularity`)
+Since 2018, transient-execution mitigations sit on the switch and syscall paths:
 
-Unlike old schedulers with a hardcoded 10 ms time slice, CFS calculates time slices dynamically based on load using two kernel parameters:
+| Mitigation             | Where                                 | Effect                                                                                                                           |
+| ---------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| KPTI (Meltdown)        | every kernel entry/exit               | CR3 swap per syscall; cheap with PCID, very expensive without. Not needed on CPUs reporting "Not affected" (as on the test host) |
+| Retpoline / eIBRS      | indirect branches                     | slower indirect calls in the scheduler (class `pick_next_task` calls)                                                            |
+| IBPB                   | `switch_mm` between distrustful tasks | flushes branch predictors; "conditional" (default) only for tasks opting in via prctl/seccomp                                    |
+| RSB stuffing           | `__switch_to_asm`                     | ~tens of cycles                                                                                                                  |
+| L1D flush / MDS `VERW` | return to user / VM entry             | can be large; mostly for VMs and SMT                                                                                             |
 
-1. **`sched_latency` (Default: ~6 ms to 24 ms):** The target window of time in which **every runnable task on the core should get to run at least once**.
-
-* If there are **3 runnable tasks** of equal priority and `sched_latency = 18 ms`, each task gets a **6 ms** time slice ($18\text{ ms} / 3$).
-
-2. **`sched_min_granularity` (Default: ~0.75 ms to 3 ms):** What if a spike hits and there are **1,000 runnable tasks** on 1 core? Dividing $18\text{ ms} / 1,000$ would give each task an **18-microsecond** time slice—the CPU would spend almost 100% of its time context-switching and thrashing caches!
-
-* To prevent this, CFS enforces a strict floor (`sched_min_granularity`): **no task will ever be preempted before running for at least `sched_min_granularity` (e.g., 0.75 ms)**, even if that stretches the total scheduling period beyond `sched_latency`.
-
-### 4.4 The Linux 6.6+ Upgrade: EEVDF (Earliest Eligible Virtual Deadline First)
-
-In Linux Kernel 6.6 (late 2023–2026 production kernels), CFS was upgraded to **EEVDF**.
-
-* **What stayed the same:** It still uses `vruntime`, `nice` weights, and a Red-Black Tree!
-* **What EEVDF fixed:** In classic CFS, a latency-sensitive audio or RPC thread that only needed **0.2 ms** of CPU time had the same priority as a background compiler thread that wanted **20 ms** of CPU time.  
-  If the compiler thread's `vruntime` was slightly lower, the latency-sensitive thread had to wait the full time slice.  
-  EEVDF lets tasks request a shorter **Virtual Slice/Deadline**: tasks whose `vruntime` is *eligible* (caught up to the average) and who ask for a **smaller slice** get an **earlier virtual deadline** and jump to the front immediately, slashing tail latency (`p99`) without starving batch workloads.
+`/sys/devices/system/cpu/vulnerabilities/*` shows what is active.  
+Benchmark numbers from before 2018 or from `mitigations=off` boots are not comparable with current production numbers.
 
 ---
 
-## 5. Multi-Core Scheduling, CPU Affinity & NUMA Topology
+## 5. Preemption: when the kernel is allowed to switch
 
-On a modern server with 32 or 64 CPU cores, there is **not** one single global Red-Black Tree (which would cause all 64 cores to contend on a single spinlock!).  
-Instead, **every CPU core has its own private Runqueue (`struct rq`) and its own private Red-Black Tree**.
+### 5.1 Preemption in user mode
+
+User-mode code is always preemptible: the timer tick or a wakeup sets `TIF_NEED_RESCHED`,  
+and the switch happens on the next return to user space (from the timer interrupt itself, or from the IPI sent to that CPU). A tight user-space loop cannot starve the scheduler.
+
+### 5.2 Preemption in kernel mode: the models
+
+The question is what happens if `TIF_NEED_RESCHED` is set while the CPU is executing *kernel* code (a long syscall, a driver).
+
+| Model (`CONFIG_PREEMPT_*` / `preempt=` with `PREEMPT_DYNAMIC`) | Kernel code preempted at                                                                                      | Latency                                            | Throughput  | Typical use                                       |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | ----------- | ------------------------------------------------- |
+| `none`                                                         | only when it blocks or returns to user                                                                        | worst (ms possible)                                | best        | servers (traditional)                             |
+| `voluntary`                                                    | plus explicit `cond_resched()`/`might_sleep()` points                                                         | better                                             | ~same       | distro desktops (traditional)                     |
+| `full`                                                         | any point where `preempt_count == 0` (not holding spinlocks, not in IRQ)                                      | good                                               | slight cost | desktops, low-latency                             |
+| `lazy` (6.13+)                                                 | fair-class reschedules wait until tick or return to user (`TIF_NEED_RESCHED_LAZY`); RT/DL preempt immediately | close to full for RT, close to none for throughput |             | intended long-term replacement for none/voluntary |
+| `PREEMPT_RT` (mainline since 6.12)                             | almost everywhere: spinlocks become sleeping rt_mutexes, threaded IRQs                                        | deterministic, tens of µs                          | lower       | industrial, audio, trading                        |
+
+`PREEMPT_DYNAMIC` kernels choose at boot (`preempt=none|voluntary|full|lazy`) and expose the current mode in `/sys/kernel/debug/sched/preempt`.  
+The test kernel is `PREEMPT_DYNAMIC` with `CONFIG_PREEMPT_NONE=y` as default.
 
 ```mermaid
-flowchart TB
-    subgraph Socket0 ["NUMA Node 0 (Physical CPU Socket 0 — Shared L3 Cache & Local RAM Bank 0)"]
-        direction LR
-        subgraph Core0 ["CPU Core 0"]
-            RQ0["Local Runqueue 0<br/>(CFS/EEVDF RB-Tree)"]
-            L1_0["Private L1/L2 Cache"]
-        end
-        subgraph Core1 ["CPU Core 1"]
-            RQ1["Local Runqueue 1<br/>(CFS/EEVDF RB-Tree)"]
-            L1_1["Private L1/L2 Cache"]
-        end
-    end
-
-    subgraph Socket1 ["NUMA Node 1 (Physical CPU Socket 1 — Shared L3 Cache & Local RAM Bank 1)"]
-        direction LR
-        subgraph Core2 ["CPU Core 2"]
-            RQ2["Local Runqueue 2<br/>(CFS/EEVDF RB-Tree)"]
-            L1_2["Private L1/L2 Cache"]
-        end
-        subgraph Core3 ["CPU Core 3"]
-            RQ3["Local Runqueue 3<br/>(CFS/EEVDF RB-Tree)"]
-            L1_3["Private L1/L2 Cache"]
-        end
-    end
-
-    RQ0 <-->|"Fast Intra-Socket Load Balancing<br/>(Shares L3 Cache!)"| RQ1
-    RQ0 <-.->|"Slow Cross-NUMA Migration<br/>(Avoided unless severe imbalance)"| RQ2
+flowchart LR
+    T["need_resched set<br/>while in kernel"] --> M{"preemption model"}
+    M -- none --> N1["wait until task blocks<br/>or returns to user"]
+    M -- voluntary --> N2["next cond_resched()"]
+    M -- lazy --> N3{"waking task class?"}
+    N3 -- "fair" --> N1b["next tick or return to user"]
+    N3 -- "rt / dl" --> N4
+    M -- full --> N4["next preempt_enable()<br/>or IRQ return with preempt_count==0"]
+    M -- RT --> N5["nearly immediate<br/>(sleeping spinlocks, threaded IRQs)"]
 ```
 
-### 5.1 Soft Affinity vs. Hard CPU Affinity (CPU Pinning)
+### 5.3 What cannot be preempted
 
-If Task A ran on **CPU Core 0** just before going to sleep for 1 millisecond, its data and instructions are still warm inside **Core 0's L1 and L2 hardware caches**. If the scheduler wakes Task A up on **Core 3** (especially on a different NUMA socket), Task A suffers a wave of cache misses and cross-socket RAM fetches.
+`preempt_count` (per-CPU) is non-zero while holding a spinlock, inside hard/soft IRQ, or with preemption explicitly disabled.  
+RCU read-side sections are preemptible under `PREEMPT_RCU`.  
+Long non-preemptible sections show up as scheduling latency for RT tasks; `PREEMPT_RT` exists to remove them.
 
-* **Soft Affinity (Default Scheduler Behavior):** The Linux scheduler defines **Scheduling Domains** matching your hardware cache hierarchy (Hyper-Thread siblings $\rightarrow$ L2 Cache group $\rightarrow$ L3 Socket / NUMA Node $\rightarrow$ Cross-Socket). It strongly prefers keeping a thread on the exact same CPU core (or at least the same L3 cache socket) unless another core is completely idle and load balancing pulls it over.
-* **Hard CPU Affinity (`sched_setaffinity` / `taskset`):** Every `task_struct` in Linux contains a bitmask called **`cpus_allowed`**. You can explicitly forbid the OS scheduler from ever moving specific threads off designated cores:
-* **CLI Command:** `taskset -c 0,1 ./my_trading_engine` (restricts the process strictly to Cores 0 and 1).
-* **Kernel Boot Isolation (`isolcpus` / `nohz_full`):** In ultra-low-latency systems (High-Frequency Trading, telecom packet processing with DPDK, or dedicated ScyllaDB shards), engineers pass `isolcpus=2-15 nohz_full=2-15` to the Linux kernel boot parameters. This kicks **all normal OS processes AND even the periodic kernel timer tick** off Cores 2–15, allowing pinned worker threads to run with **zero involuntary context switches**!
+### 5.4 The tick
+
+`CONFIG_HZ` (250 on the test kernel; 100/250/300/1000 common) sets the periodic tick.  
+On each tick `sched_tick()` (formerly `scheduler_tick()`) updates the current task's runtime, PELT averages, checks slice expiry (sets need_resched), and triggers periodic load balancing.  
+With `HZ=250`, a CPU-bound fair task can overrun its slice by up to 4 ms before the tick notices;  
+high-resolution timers (`HRTICK` feature, off by default) can enforce slices precisely at extra cost.
 
 ---
 
-## 6. Staff/Architect Production Playbook: Diagnosing Scheduling Bottlenecks
+## 6. Scheduling classes
 
-When a microservice exhibits mysterious `p99` latency spikes in production, use these three architectural patterns and diagnostic commands:
+`pick_next_task()` walks the classes in fixed order; the first class that has a runnable task wins.  
+A lower class only runs when all higher classes are empty on that CPU.
 
-### 6.1 How to Measure Context Switches in Production
+```mermaid
+flowchart TD
+    STOP["stop_sched_class<br/>migration/N, stop_machine<br/>(preempts everything)"] --> DL
+    DL["dl_sched_class<br/>SCHED_DEADLINE (EDF + CBS)<br/>+ fair_server (6.12+)"] --> RT
+    RT["rt_sched_class<br/>SCHED_FIFO / SCHED_RR, prio 1–99"] --> FAIR
+    FAIR["fair_sched_class<br/>SCHED_NORMAL (OTHER), SCHED_BATCH, SCHED_IDLE<br/>EEVDF since 6.6"] --> EXT
+    EXT["ext_sched_class<br/>SCHED_EXT, BPF-defined (6.12+)"] --> IDLE
+    IDLE["idle_sched_class<br/>swapper/N, enters cpuidle"]
+```
 
-1. **System-Wide Context Switch Rate (`vmstat 1`):**
-Look at the `cs` (context switches per second) and `r` (runnable threads waiting for CPU) columns. If `r` is consistently greater than your physical CPU core count and `cs` exceeds $50,000\text{–}100,000/\text{sec}$, your machine is thrashing on scheduling overhead.
-2. **Per-Process Voluntary vs. Involuntary Breakdown (`pidstat -w -p <PID> 1`):**
+| Policy                         | Class | Priority input                | Notes                                                                       |
+| ------------------------------ | ----- | ----------------------------- | --------------------------------------------------------------------------- |
+| `SCHED_OTHER` (`SCHED_NORMAL`) | fair  | nice −20…19 → weight          | default                                                                     |
+| `SCHED_BATCH`                  | fair  | nice                          | never wakeup-preempts others; good for throughput jobs                      |
+| `SCHED_IDLE`                   | fair  | weight 3 (below nice 19's 15) | runs only when nothing else wants the CPU (within its group)                |
+| `SCHED_FIFO`                   | rt    | 1–99                          | runs until it blocks, yields or a higher RT prio arrives                    |
+| `SCHED_RR`                     | rt    | 1–99                          | FIFO + round-robin slice among equal prio (`sched_rr_timeslice_ms`, 100 ms) |
+| `SCHED_DEADLINE`               | dl    | (runtime, deadline, period)   | admission-controlled; highest user-visible class                            |
+| `SCHED_EXT`                    | ext   | BPF scheduler                 | falls back to fair if the BPF scheduler exits/errs                          |
 
-* **`cswch/s` (Voluntary switches/sec):** High values mean the thread is constantly blocking on I/O or mutex locks.
-* **`nvcswch/s` (Involuntary switches/sec):** High values mean too many runnable threads are competing for CPU cores.
+Kernel-internal priority numbering (`prio` in `/proc/<pid>/sched`): 0–99 RT (inverted: `prio = 99 − rt_priority`), 100–139 fair (`120 + nice`), −1 for deadline.
 
-### 6.2 The Kubernetes CFS Quota Trap (CPU Throttling Despite Low Average CPU!)
+---
 
-One of the most famous production incidents across cloud-native companies involves how **Kubernetes CPU Limits** interact with the **Linux CFS Scheduler**:
+## 7. The fair class: from CFS to EEVDF
 
-* When you set `resources.limits.cpu: "1000m"` (1 CPU core) in Kubernetes, the container runtime configures Linux `cgroups` with:
-* `cpu.cfs_period_us = 100,000` (100 ms accounting window)
-* `cpu.cfs_quota_us = 100,000` (100 ms total CPU time allowed per 100 ms window)
+### 7.1 CFS (2.6.23 – 6.5) in one paragraph
 
-* **The Trap:** Suppose your Java or Go container runs on a **16-core Kubernetes node** and spawns **16 worker threads**.
-* An incoming request bursts across all 16 threads simultaneously. In just **6.25 milliseconds** of wall-clock time, those 16 threads running in parallel consume $16 \times 6.25\text{ ms} = \mathbf{100\text{ ms}}$ of CPU quota!
-* **The Consequence:** Even though only 6.25 ms of the 100 ms window has elapsed, your container has exhausted 100% of its `cfs_quota_us`. The Linux CFS Bandwidth Controller **forcibly throttles (freezes) all threads in your pod for the remaining 93.75 milliseconds** until the next 100 ms period starts!
-* Your Grafana dashboard shows average CPU utilization at only 30%, yet your `p99` API latency jumps from 5 ms to **100+ ms**!
-* **The Fix:** Monitor `container_cpu_cfs_throttled_periods_total` in Prometheus. Either remove hard CPU `limits` (relying on CPU `requests` for proportional CFS weight guarantees) or size thread pools (`GOMAXPROCS` / `-XX:ActiveProcessorCount`) to match your container's CPU quota rather than the host node's 64 cores.
+CFS kept each runnable task in a red-black tree keyed by **vruntime**, the task's CPU time scaled inversely by its weight (`delta_vruntime = delta_exec × 1024 / weight`).  
+It always ran the leftmost (smallest vruntime) task.  
+The slice was derived from `sched_latency` (6 ms × (1 + log2 ncpus)) divided among runnable tasks, bounded below by `min_granularity`.  
+Waking tasks were placed near `min_vruntime` minus a sleeper credit and could preempt the current task if their vruntime was smaller by more than `wakeup_granularity`.  
+The result was fair over time but **latency was a side effect of heuristics**: there was no way to say "this task needs short latency but not more CPU", and the many knobs interacted badly.
+
+### 7.2 EEVDF (6.6+)
+
+EEVDF, *Earliest Eligible Virtual Deadline First* (Stoica & Abdel-Wahab, 1995; implemented by Peter Zijlstra), keeps the weighted-fair-share idea but makes the pick rule principled:
+
+- **Virtual time `V`**: the weighted average vruntime of all runnable entities (`avg_vruntime()`), i.e. where an ideal fluid scheduler would be.
+- **Lag** of task *i*: `lag_i = w_i × (V − v_i)`, service owed minus service received. Positive lag = the task is owed CPU.
+- **Eligible** iff `lag_i ≥ 0` (equivalently `v_i ≤ V`): only tasks that have not received more than their share may run.
+- **Virtual deadline**: `vd_i = v_i + slice_i × (1024 / w_i)`. A shorter requested slice gives an earlier deadline.
+- **Pick**: among eligible tasks, the one with the **earliest virtual deadline**.  
+  Implemented with an augmented rbtree ordered by deadline and annotated with min vruntime per subtree, so the pick is O(log n).
+
+```mermaid
+flowchart LR
+    subgraph RQ["fair runqueue (V = weighted avg vruntime = 100)"]
+        A["A: v=90, slice=3ms<br/>eligible, vd=93"]
+        B["B: v=95, slice=0.7ms<br/>eligible, vd=95.7"]
+        C["C: v=104, slice=3ms<br/>NOT eligible (v > V)"]
+        D["D: v=99, slice=3ms<br/>eligible, vd=102"]
+    end
+    A -- "earliest eligible deadline" --> PICK["pick A"]
+```
+
+Consequences:
+
+- **Latency is a per-task request**, not a global knob: the slice. Since 6.12 a fair task can request a custom slice via `sched_setattr(.sched_runtime = slice_ns)` (0.1–100 ms). Short slice ⇒ earlier deadlines ⇒ runs sooner after waking, but *not more CPU overall* (eligibility still enforces share).
+- **Default slice** = `base_slice` × (1 + ilog2(min(ncpus, 8))). The base is 0.7 ms on recent kernels (0.75 ms originally). The test VM (4 CPUs) shows `se.slice : 2100000` ns = 0.7 × 3 in `/proc/self/sched`.
+- **Lag is preserved across sleep** (`PLACE_LAG`): a task that sleeps is re-placed with its prior lag (decayed), instead of CFS's sleeper bonus. Tasks cannot game the scheduler by sleeping briefly.
+- **Delayed dequeue** (6.12, `DELAY_DEQUEUE`): a task with negative lag that blocks stays on the runqueue ("sched_delayed") until its lag decays to zero, so it cannot shed its debt by sleeping.
+- **`RUN_TO_PARITY`**: the current task keeps running until it reaches its deadline, avoiding excessive preemption among equal tasks.
+- **Wakeup preemption**: a waking task preempts current if it is eligible and its deadline is earlier. This is how the sleeper in the latency test (§15) gets a p50 wakeup overshoot of ~70–90 µs even with 4 hogs on its CPU.
+
+### 7.3 Slices vs tick in practice
+
+The slice is enforced at tick granularity unless `HRTICK` is enabled.  
+With HZ=250 and a 2.1 ms slice, a hog runs 4 ms per turn.  
+Measured: a 1 ms sleeper sharing CPU 0 with 4 hogs saw p99 overshoot of **3.0 ms**, max **9.8 ms**: when it was not eligible at wakeup it waited for running hogs' slices to expire at tick boundaries.
+
+---
+
+## 8. Weights, nice and autogroup
+
+### 8.1 The weight table
+
+`sched_prio_to_weight[]` maps nice to weight; each nice step is ~1.25× (≈10% CPU difference between two competing tasks):
+
+| nice | weight |     | nice         | weight   |
+| ---- | ------ | --- | ------------ | -------- |
+| −20  | 88761  |     | 0            | **1024** |
+| −10  | 9548   |     | 5            | 335      |
+| −5   | 3121   |     | 10           | 110      |
+| −1   | 1277   |     | 19           | 15       |
+|      |        |     | `SCHED_IDLE` | 3        |
+
+Share of task *i* on a contended CPU = `w_i / Σw`. Measured (hogs pinned to one CPU, 5 s, §15):
+
+| Mix               | Expected                | Measured                  |
+| ----------------- | ----------------------- | ------------------------- |
+| nice 0 vs nice 5  | 1024/(1024+335) = 75.3% | **75.3% / 24.7%**         |
+| nice 0 vs nice 19 | 1024/1039 = 98.6%       | **98.5% / 1.5%**          |
+| nice −5 vs 0 vs 0 | 3121/5169 = 60.4%       | **60.4% / 19.8% / 19.8%** |
+
+Weights are exact in steady state.  
+Nice is a **share**, not a priority: a nice 19 task still runs when it is the only runnable task, and a nice −20 task cannot starve a nice 0 task completely (1.1% left).
+
+### 8.2 Hierarchical (group) scheduling
+
+With `CONFIG_FAIR_GROUP_SCHED`, each cgroup has its own fair runqueue per CPU and appears as a single **group entity** in its parent.  
+Weights apply at each level: a cgroup with weight 100 containing 1000 threads gets the same share as a sibling cgroup with weight 100 containing 1 thread.  
+Nice only arbitrates among siblings in the same group.
+
+```mermaid
+flowchart TD
+    ROOT["root cfs_rq"] --> G1["group A (cpu.weight=100)"]
+    ROOT --> G2["group B (cpu.weight=300)"]
+    G1 --> a1["t1"] & a2["t2"] & a3["t3"]
+    G2 --> b1["t4"]
+    NOTE["contended CPU: B's single task gets 75%,<br/>A's three tasks split 25%"]
+```
+
+### 8.3 Autogroup
+
+`kernel.sched_autogroup_enabled=1` (enabled on the test VM and on most desktop distros) puts each session (`setsid`) into its own hidden task group.  
+Consequence: **`nice` between processes in different sessions has almost no effect**; only `/proc/<pid>/autogroup`'s nice value does.  
+Servers managed by systemd already get cgroup groups, which take precedence over autogroups.
+
+---
+
+## 9. PELT: load and utilisation tracking
+
+Per-Entity Load Tracking keeps exponentially decayed averages per task, cfs_rq and CPU, in 1024 µs periods with decay `y` where `y^32 = 0.5` (**32 ms half-life**):
+
+| Signal         | Meaning                                                          | Used by                                                                             |
+| -------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `load_avg`     | runnable fraction × weight                                       | load balancing (which CPU is busiest)                                               |
+| `runnable_avg` | fraction of time runnable (running + waiting)                    | detecting overload                                                                  |
+| `util_avg`     | fraction of time actually running, 0–1024 scaled to CPU capacity | `schedutil` cpufreq governor, energy-aware scheduling, task placement on big.LITTLE |
+| `util_est`     | max of recent per-activation utilisation                         | faster ramp-up for periodic bursty tasks                                            |
+
+Visible in `/proc/<pid>/sched` (`se.avg.util_avg` etc.). Implication: the kernel's view of "how busy a task is" lags reality by tens of ms.  
+A task that becomes busy after idling needs ~100 ms for `util_avg` to approach 1024, which delays both CPU frequency ramp-up (schedutil) and migration to a big core.  
+`util_clamp` (`cpu.uclamp.min/max`, `sched_setattr`) lets userspace override this for latency-sensitive tasks.
+
+---
+
+## 10. Multi-CPU: runqueues, wakeup placement, load balancing
+
+### 10.1 Scheduling domains
+
+The topology is a hierarchy of **sched domains**, each with groups of CPUs:
+
+```mermaid
+flowchart TD
+    NUMA["NUMA domain<br/>(nodes, balance rarely, costly)"] --> PKG0["PKG / MC domain node 0<br/>(CPUs sharing LLC)"]
+    NUMA --> PKG1["PKG / MC domain node 1"]
+    PKG0 --> SMT0["SMT domain<br/>core 0: cpu0, cpu32"]
+    PKG0 --> SMT1["SMT domain<br/>core 1: cpu1, cpu33"]
+    PKG1 --> SMT2["SMT domain<br/>core 16: cpu16, cpu48"]
+```
+
+Lower domains balance more often and more aggressively (cheap: shared caches);  
+higher domains balance less often (migrating across LLC or NUMA nodes costs cache warmth and memory locality).  
+`cat /proc/schedstat` and `/sys/kernel/debug/sched/domains/` expose the layout.
+
+### 10.2 Wakeup placement (`select_task_rq_fair`)
+
+Most migrations happen at **wakeup**, not via periodic balancing:
+
+```mermaid
+flowchart TD
+    W["try_to_wake_up(p)"] --> A{"wake_affine:<br/>pull toward waker's CPU<br/>or keep prev CPU?"}
+    A --> T["target = prev_cpu or waker_cpu"]
+    T --> S["select_idle_sibling(target)<br/>scan LLC domain"]
+    S --> S1{"target idle?"} -- yes --> DONE["enqueue there"]
+    S1 -- no --> S2{"recent_used_cpu / prev idle<br/>and cache-affine?"} -- yes --> DONE
+    S2 -- no --> S3["select_idle_core:<br/>whole idle SMT core in LLC"]
+    S3 --> S4["select_idle_cpu:<br/>any idle CPU (scan bounded<br/>by SIS_UTIL)"]
+    S4 --> DONE
+    DONE --> P{"wakee should preempt curr?<br/>(EEVDF eligible + earlier deadline)"}
+    P -- yes --> R["resched_curr: set flag / send IPI"]
+```
+
+Search is limited to the **last-level-cache domain** for cost reasons; work spreading across LLCs/NUMA nodes is left to periodic balancing.  
+The scan is bounded by `SIS_UTIL` (shorter scans when the LLC is busy).
+
+### 10.3 Periodic, idle and NUMA balancing
+
+- **Periodic balance** (`sched_balance_domains` from `SCHED_SOFTIRQ`): at each domain level, find the busiest group by load/utilisation/runnable count,  
+  pull tasks to the local CPU if the imbalance justifies it.  
+  Tasks that ran recently (< `sysctl_sched_migration_cost`, 0.5 ms) are considered cache-hot and skipped where possible.
+- **Newidle balance**: a CPU about to go idle tries to pull work first (`sched_balance_newidle`). Cheap and important for throughput; bounded by expected idle duration vs cost.
+- **Active balance**: pushes a *running* task via the stopper (`migration/N` thread) when it is the only way to fix imbalance (e.g. misfit task on a little core).
+- **NUMA balancing** (`kernel.numa_balancing=1`): periodically unmaps ranges of a task's memory to take hinting faults, learns which node the task touches most,  
+  then migrates pages or the task toward each other. Visible as `numa_*` fields in `/proc/<pid>/sched`.
+
+### 10.4 Affinity and cpusets
+
+`sched_setaffinity` / `taskset` / `cpuset.cpus` restrict where a task may run.  
+Restriction disables balancing for that task and can create **imbalances the balancer cannot fix**: pinning 4 hogs to one CPU leaves 3 CPUs idle, as in the measurement setup.  
+In containers, cpuset pinning gives cache locality and protects against noisy neighbours; CFS quotas (§12) do not.
+
+---
+
+## 11. Real-time and deadline scheduling
+
+### 11.1 SCHED_FIFO / SCHED_RR
+
+- Fixed priorities 1–99; always above fair tasks.  
+  Each CPU runs the highest-priority runnable RT task; **push/pull** logic migrates RT tasks so that the N highest-priority tasks run on N CPUs (global fixed-priority scheduling, best effort).
+- FIFO: no slice. RR: 100 ms slice among same priority.
+- Measured effect: a 1 ms sleeper with 4 fair hogs on its CPU: fair p99 overshoot **3.0 ms**; same sleeper as `SCHED_FIFO 50`: p99 **70 µs**, p50 **25 µs** (VM timer/hypervisor noise dominates the remainder).
+- **Priority inversion**: a high-prio task blocked on a lock held by a low-prio task that cannot run. Use `PTHREAD_PRIO_INHERIT` mutexes (backed by PI futexes / rt_mutex).
+
+### 11.2 Starvation protection
+
+A runaway FIFO task would starve everything else on its CPU.  
+Historically **RT throttling** (`sched_rt_runtime_us=950000` of `sched_rt_period_us=1000000`) capped RT at 95% per period.  
+Since 6.12 this is implemented by a per-CPU **deadline "fair server"**: a SCHED_DEADLINE entity that reserves runtime (default 50 ms per 1 s)  
+for fair tasks when RT hogs the CPU, and does nothing when there is no contention.  
+Setting `sched_rt_runtime_us=-1` disables legacy throttling; know what you are doing.
+
+### 11.3 SCHED_DEADLINE
+
+Task declares `(runtime, deadline, period)`, e.g. 2 ms every 10 ms, due within 5 ms:
+
+```c
+struct sched_attr a = {
+    .size = sizeof a, .sched_policy = SCHED_DEADLINE,
+    .sched_runtime  =  2 * 1000 * 1000,
+    .sched_deadline =  5 * 1000 * 1000,
+    .sched_period   = 10 * 1000 * 1000,
+};
+syscall(SYS_sched_setattr, 0, &a, 0);
+```
+
+- Scheduled by **EDF** (earliest absolute deadline first), globally across the root domain.
+- **CBS** (Constant Bandwidth Server) enforces the runtime budget: a task that overruns is throttled until its next period, so it cannot hurt others.
+- **Admission control**: `Σ runtime/period ≤ (sched_rt_runtime_us / sched_rt_period_us) × ncpus`; `sched_setattr` fails with `EBUSY` otherwise.
+- Cannot `fork` (by default) and requires `CAP_SYS_NICE`. Good for periodic control loops, audio, video pipelines.
+
+---
+
+## 12. cgroups: weights, quotas and throttling
+
+### 12.1 Controls
+
+| cgroup v2 file                                        | v1 equivalent                           | Semantics                                                                                      |
+| ----------------------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `cpu.weight` (1–10000, default 100)                   | `cpu.shares` (default 1024)             | proportional share **under contention only**; work-conserving                                  |
+| `cpu.weight.nice`                                     | —                                       | same, expressed as nice                                                                        |
+| `cpu.max` = `"$QUOTA $PERIOD"` (default `max 100000`) | `cpu.cfs_quota_us`, `cpu.cfs_period_us` | hard ceiling: at most QUOTA µs of CPU per PERIOD **summed over all CPUs**; not work-conserving |
+| `cpu.max.burst`                                       | `cpu.cfs_burst_us`                      | allow accumulating unused quota up to burst                                                    |
+| `cpu.idle`                                            | `cpu.idle`                              | group behaves like `SCHED_IDLE` relative to siblings                                           |
+| `cpu.uclamp.min/max`                                  | —                                       | utilisation clamps (frequency, placement)                                                      |
+| `cpuset.cpus`                                         | `cpuset.cpus`                           | which CPUs                                                                                     |
+| `cpu.stat`                                            | `cpu.stat`                              | `nr_periods`, `nr_throttled`, `throttled_usec`                                                 |
+
+Kubernetes maps `requests.cpu` → `cpu.weight` and `limits.cpu` → `cpu.max`.
+
+### 12.2 How bandwidth throttling works
+
+```mermaid
+sequenceDiagram
+    participant G as cgroup global pool (quota per period)
+    participant C0 as cfs_rq CPU0
+    participant C1 as cfs_rq CPU1
+    Note over G: period starts: pool = QUOTA
+    C0->>G: need runtime: take slice (sched_cfs_bandwidth_slice_us = 5 ms)
+    C1->>G: take slice
+    C0->>C0: run threads, consume local runtime
+    C1->>G: take another slice ... pool hits 0
+    C0->>C0: local runtime exhausted, pool empty → throttle cfs_rq (dequeue group from CPU0)
+    C1->>C1: same → throttle
+    Note over C0,C1: group's threads cannot run, even if CPUs are idle
+    G->>G: period timer fires (every PERIOD)
+    G->>C0: refill pool, unthrottle
+    G->>C1: unthrottle
+```
+
+The quota is a **CPU-time** budget across all CPUs. A process with N busy threads burns quota N× faster in wall-clock time.  
+With `cpu.max = 100000 100000` (1 CPU) and 4 busy threads on a 4-CPU machine, the group burns its 100 ms budget in ~25 ms of wall time and is then frozen for ~75 ms.
+
+### 12.3 Measured: throttling latency
+
+A request needing **10 ms of CPU**, issued every 20 ms, in a process with 0 or 3 additional busy threads, with and without a 1-CPU quota (`100000/100000`):
+
+| Setup                   | p50         | p90  | p99  | max  |
+| ----------------------- | ----------- | ---- | ---- | ---- |
+| no cgroup limit, 0 hogs | 10.0 ms     | 10.1 | 11.7 | 12.2 |
+| no cgroup limit, 3 hogs | 10.0 ms     | 11.2 | 15.0 | 23.8 |
+| quota 1 CPU, 0 hogs     | 10.0 ms     | 10.7 | 13.0 | 15.0 |
+| **quota 1 CPU, 3 hogs** | **79.9 ms** | 80.6 | 84.5 | 85.2 |
+
+`cpu.stat` after the run: 100 of 133 periods throttled, 27.1 s total throttled time.  
+Average CPU usage of the group was within its 1-CPU limit the whole time, yet request latency was **8×** worse.  
+This is the textbook reason latency-sensitive services should:
+
+- Prefer `cpu.weight` (requests) over `cpu.max` (limits), or set limits well above typical usage.
+- Size thread pools / `GOMAXPROCS` / JVM `ActiveProcessorCount` to the quota, not the host's core count (Go ≥ 1.25, JDK ≥ 10 container support, .NET do this automatically).
+- Use `cpu.max.burst` to absorb short spikes.
+- Monitor `nr_throttled`/`throttled_usec` (cAdvisor: `container_cpu_cfs_throttled_periods_total`), not just CPU usage.
+- Consider a shorter period (e.g. 10–20 ms) to cap the worst-case freeze, at more timer overhead.
+
+---
+
+## 13. Idle, ticks and CPU isolation
+
+### 13.1 Idle
+
+When every class is empty, the idle task (`swapper/N`, pid 0) runs `do_idle()` → cpuidle **governor** (`menu`, `teo`, `haltpoll` in VMs) picks a C-state from the predicted idle duration vs each state's exit latency and target residency.  
+Deeper states save power but add wakeup latency (§4.2).  
+Latency-critical systems cap them with `/dev/cpu_dma_latency` (PM QoS), `intel_idle.max_cstate`, `processor.max_cstate`, or `cpupower idle-set`.
+
+### 13.2 Ticks
+
+| Config                              | Tick behaviour                                                                                     |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `NO_HZ_IDLE` (default, test kernel) | tick stopped on idle CPUs; running CPUs tick at HZ                                                 |
+| `NO_HZ_FULL` + `nohz_full=` CPUs    | tick stopped on CPUs running a **single** task (residual 1 Hz); for HPC/low-latency isolated cores |
+| periodic                            | tick always; legacy                                                                                |
+
+### 13.3 Isolating CPUs for latency-critical threads
+
+| Mechanism                                                           | Effect                                                                          |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `isolcpus=domain,managed_irq,<cpus>` (boot)                         | remove CPUs from load-balancing domains; only explicitly pinned tasks run there |
+| cpuset partitions (`cpuset.cpus.partition = isolated`, v2)          | runtime equivalent of isolcpus                                                  |
+| `nohz_full=<cpus>`                                                  | stop the tick when one task runs                                                |
+| `rcu_nocbs=<cpus>`                                                  | offload RCU callbacks                                                           |
+| IRQ affinity (`/proc/irq/*/smp_affinity`, `irqbalance` banned CPUs) | keep device interrupts away                                                     |
+| `kthread_cpus`/housekeeping                                         | keep kernel threads on housekeeping CPUs                                        |
+
+Typical low-latency layout: CPUs 0–1 housekeeping (kernel threads, IRQs, OS), CPUs 2–N isolated, each running one pinned busy-polling thread (DPDK, trading engines, Seastar/thread-per-core).
+
+---
+
+## 14. sched_ext: BPF schedulers
+
+Merged in 6.12. A BPF program implements callbacks (`select_cpu`, `enqueue`, `dispatch`, `running`, `stopping`, …) using **dispatch queues** (DSQs) and kfuncs;  
+tasks with `SCHED_EXT` (or all fair tasks in "switch all" mode) are scheduled by it.
+
+- Safety: the BPF verifier ensures memory safety; a watchdog kicks the scheduler out (tasks revert to fair) if a runnable task is not scheduled within a timeout, or on any error.  
+  Bad policy degrades performance but cannot crash the kernel.
+- Use cases: workload-specific policies (Meta's `scx_layered`, gaming-oriented `scx_lavd`, `scx_rusty` with user-space load balancing), fast experimentation without rebooting.
+- Tools: `scx` repository schedulers, `scxtop`; check active scheduler via `/sys/kernel/sched_ext/state` and `root/ops`.
+
+---
+
+## 15. Measured numbers
+
+### 15.1 Test bed
+
+4 vCPU Firecracker microVM on Intel Xeon @ 2.1 GHz (48 KiB L1d and 2 MiB L2 per core, shared L3), Linux 6.18, `PREEMPT_DYNAMIC` (default none), HZ=250, cgroup v1 hierarchy for `cpu`.  
+Mitigations: eIBRS, conditional IBPB, Meltdown not affected (no KPTI). gcc -O2. Virtualisation inflates syscall, IPI and timer costs; compare **ratios**, not absolutes.
+
+### 15.2 Summary
+
+| Measurement                                                         | Value                                        |
+| ------------------------------------------------------------------- | -------------------------------------------- |
+| Trivial syscall (`getppid`)                                         | 139 ns                                       |
+| `sched_yield()` with nothing else runnable                          | 276 ns                                       |
+| futex ping-pong, both threads pinned to one CPU                     | **3.2 µs** / round trip (~1.6 µs per switch) |
+| futex ping-pong across CPUs                                         | **24.7 µs** / round trip                     |
+| Switch overhead, working set ≤ 256 KiB per task                     | ~1.5 µs per switch                           |
+| Switch overhead, working set ≥ 1 MiB per task (exceeds L2 combined) | **5.6–8.9 µs** per switch                    |
+| Wakeup overshoot of a 1 ms `nanosleep`, idle CPU                    | p50 92 µs, p99 203 µs                        |
+| Same, 4 fair hogs on the CPU                                        | p50 76 µs, **p99 3.0 ms**, max 9.8 ms        |
+| Same, sleeper nice −10                                              | p50 72 µs, p99 530 µs                        |
+| Same, sleeper `SCHED_FIFO 50`                                       | **p50 25 µs, p99 70 µs**                     |
+| CPU split nice 0 / nice 5                                           | 75.3% / 24.7% (theory 75.3%)                 |
+| CPU split nice 0 / nice 19                                          | 98.5% / 1.5% (theory 98.6%)                  |
+| 10 ms request under 1-CPU quota with 3 busy sibling threads         | **p50 79.9 ms** (vs 10.0 ms without quota)   |
+| Default fair slice on 4 CPUs (`se.slice`)                           | 2.1 ms                                       |
+
+### 15.3 What the numbers teach
+
+1. The direct switch is ~1–2 µs; it only matters at > ~100k switches/s per core (that would be 10–20% of a core).
+2. Cache refill can be several times the direct cost; the cheapest switch is the one that keeps hot data in L2.
+3. Cross-CPU wakeups cost ~an order of magnitude more than same-CPU handoffs.
+4. Under contention, fair-class tail latency is set by slice length and tick granularity (ms), not by switch cost (µs). Use RT policy, shorter EEVDF slices, or remove contention.
+5. Weights are precise; cgroup quotas are a blunt instrument that converts parallelism into multi-tens-of-ms stalls.
+
+---
+
+## 16. Tuning playbook
+
+| Symptom                                                    | Check                                               | Likely fix                                                                                                                             |
+| ---------------------------------------------------------- | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| High `cs` in `vmstat`, low throughput                      | `pidstat -wt`: voluntary or involuntary?            | voluntary: lock contention / tiny I/O → batch, fewer handoffs; involuntary: too many runnable threads → shrink pools                   |
+| `r` column ≫ CPU count, PSI `cpu some` high                | `runqlat`, `/proc/pressure/cpu`                     | oversubscription: add CPUs, reduce threads, prioritise via weights                                                                     |
+| p99 latency spikes at ~multiples of 100 ms in containers   | `cpu.stat nr_throttled`                             | raise/remove `cpu.max`, `cpu.max.burst`, size `GOMAXPROCS`/pools to quota                                                              |
+| Latency-critical thread delayed by batch work on same CPUs | `perf sched latency`, `runqlat -p`                  | `SCHED_BATCH`/`SCHED_IDLE`/nice for batch; `cpu.idle` for batch cgroups; shorter slice via `sched_setattr`; RT for the critical thread |
+| Throughput drops after migration to bigger box             | `perf stat -e cpu-migrations`, NUMA stats           | pin to a node (`numactl --cpunodebind --membind`), cpusets per service                                                                 |
+| Periodic µs jitter on isolated core                        | `trace-cmd`/`osnoise` tracer, `/proc/interrupts`    | `isolcpus`/partition + `nohz_full` + `rcu_nocbs` + IRQ affinity + C-state limit                                                        |
+| RT task starves system                                     | `chrt -p`, fair server / RT throttling state        | lower priority, block/yield, keep starvation protection enabled                                                                        |
+| `nice` has no visible effect                               | `cat /proc/<pid>/autogroup`                         | autogroup; set autogroup nice or use cgroups                                                                                           |
+| Slow frequency ramp for bursty service                     | `util_avg` in `/proc/<pid>/sched`, cpufreq governor | `uclamp.min`, `performance` governor                                                                                                   |
+
+---
+
+## 17. Observation cheat sheet
+
+```bash
+# Per-task scheduler stats: policy, prio, slice, vruntime, migrations, PELT
+cat /proc/$PID/sched
+grep ctxt /proc/$PID/status                     # voluntary / nonvoluntary
+cat /proc/$PID/schedstat                        # run time ns, wait time ns, timeslices
+
+# System-wide
+vmstat 1                                        # r (runnable), cs (switches/s)
+pidstat -w -t 1                                 # per-thread cswch/s nvcswch/s
+cat /proc/pressure/cpu                          # PSI: % time tasks waited for CPU
+mpstat -P ALL 1
+
+# Scheduler tracing
+perf sched record -- sleep 10
+perf sched latency --sort max                   # per-task max wait
+perf sched timehist -Mw                         # per-switch timeline with wait/run/delay
+perf stat -e context-switches,cpu-migrations,cs -a sleep 5
+trace-cmd record -e sched_switch -e sched_wakeup -- sleep 5
+
+# BPF tools (bcc / bpftrace)
+runqlat -m 5 1      # run-queue latency histogram
+runqlen 5 1         # run-queue length
+cpudist             # on-CPU time per scheduling
+offcputime -p $PID  # why threads block (stacks)
+bpftrace -e 'tracepoint:sched:sched_switch { @[args->prev_state] = count(); }'
+
+# Policies and priorities
+chrt -p $PID                     # show policy
+chrt -f -p 50 $PID               # SCHED_FIFO 50
+chrt -b 0 cmd                    # SCHED_BATCH
+chrt -i 0 cmd                    # SCHED_IDLE
+taskset -cp 2-3 $PID             # affinity
+renice -n 5 -p $PID
+cat /proc/$PID/autogroup
+
+# cgroups
+cat /sys/fs/cgroup/<grp>/cpu.max /sys/fs/cgroup/<grp>/cpu.weight
+cat /sys/fs/cgroup/<grp>/cpu.stat               # nr_throttled, throttled_usec
+cat /sys/fs/cgroup/<grp>/cpu.pressure
+
+# Kernel knobs (debugfs)
+ls /sys/kernel/debug/sched/                     # base_slice_ns, preempt, features, domains/
+cat /sys/kernel/debug/sched/features            # PLACE_LAG RUN_TO_PARITY DELAY_DEQUEUE ...
+sysctl kernel.sched_rt_runtime_us kernel.sched_rt_period_us kernel.sched_autogroup_enabled
+cat /sys/devices/system/cpu/vulnerabilities/*
+cat /sys/devices/system/cpu/cpu0/cpuidle/state*/{name,latency}
+```
 
 ---
