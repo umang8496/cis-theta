@@ -11,7 +11,8 @@
 
 # Typeahead Suggestion System
 
-> Design document for a search autocomplete service that serves **1 million suggestion requests per second**, stays **highly available and fault tolerant**, and answers within **10 ms p99 (server side)**. It supports prefix, typo-tolerant and infix matching with per-locale language analysis.
+> Design document for a search autocomplete service that serves **1 million suggestion requests per second**, stays **highly available and fault tolerant**,  
+and answers within **10 ms p99 (server side)**. It supports prefix, typo-tolerant and infix matching with per-locale language analysis.
 
 | Field         | Value                                                                |
 |---------------|----------------------------------------------------------------------|
@@ -25,15 +26,15 @@
 
 ## Table of Contents
 
-1. [Problem Statement](#1-problem-statement)
-2. [Requirements](#2-requirements)
-3. [Assumptions](#3-assumptions)
-4. [Capacity Estimation](#4-capacity-estimation)
-5. [Core Design Principles](#5-core-design-principles)
-6. [API Design](#6-api-design)
-7. [High-Level Architecture](#7-high-level-architecture)
-8. [Read Path: Deep Dive](#8-read-path-deep-dive)
-9. [High Availability and Fault Tolerance](#9-high-availability-and-fault-tolerance)
+01. [Problem Statement](#1-problem-statement)
+02. [Requirements](#2-requirements)
+03. [Assumptions](#3-assumptions)
+04. [Capacity Estimation](#4-capacity-estimation)
+05. [Core Design Principles](#5-core-design-principles)
+06. [API Design](#6-api-design)
+07. [High-Level Architecture](#7-high-level-architecture)
+08. [Read Path: Deep Dive](#8-read-path-deep-dive)
+09. [High Availability and Fault Tolerance](#9-high-availability-and-fault-tolerance)
 10. [Write Path: Ranking and Freshness](#10-write-path-ranking-and-freshness)
 11. [Data Model Reference](#11-data-model-reference)
 12. [Observability and SLOs](#12-observability-and-slos)
@@ -46,7 +47,9 @@
 
 ## 1. Problem Statement
 
-A user types into a search bar. After **every keystroke** the client calls the backend, which returns the **10 best completions** for the current input. Suggestions must tolerate typos, match words inside phrases, and follow the language rules of the user's locale. Popularity data is recomputed nightly; trending phrases must surface within minutes.
+A user types into a search bar. After **every keystroke** the client calls the backend, which returns the **10 best completions** for the current input.  
+Suggestions must tolerate typos, match words inside phrases, and follow the language rules of the user's locale.  
+Popularity data is recomputed nightly; trending phrases must surface within minutes.
 
 The whole system exists to serve one function:
 
@@ -149,7 +152,9 @@ suggest(locale, input) -> [s1, s2, ..., s10]    ordered by rank
 | All 20 locales             | Smaller locales are much smaller                                                | ~15 GB    |
 | Worst case during a swap   | Two versions fully resident                                                     | ~30 GB    |
 
-**Why the hot map is bounded.** Summing the number of completions over every prefix gives the total length of all phrases: 50 M × 20 = 1 billion. Therefore at most 1 B ÷ 1,000 = **1 million prefixes** can have more than 1,000 completions. Only those are stored in the hot map (§8.7).
+**Why the hot map is bounded.** Summing the number of completions over every prefix gives the total length of all phrases: 50 M × 20 = 1 billion.  
+Therefore at most 1 B ÷ 1,000 = **1 million prefixes** can have more than 1,000 completions.  
+Only those are stored in the hot map (§8.7).
 
 ### 4.3 Bandwidth
 
@@ -180,7 +185,8 @@ At the average rate (÷ 2.5) this is ~3.9 TB/day raw, about 0.8 TB/day as compre
 | CPU per request, fuzzy or infix tiers | 100–500 µs, on ~15% of requests                         |
 | Planning capacity per node            | **80,000 RPS at ≤ 60% CPU** (validate with a load test) |
 
-**Sizing rule.** Each region is provisioned so that, **with the CDN down and one AZ lost**, it still serves its full peak share. Caches are treated as an optimization, never as a dependency.
+**Sizing rule.** Each region is provisioned so that, **with the CDN down and one AZ lost**, it still serves its full peak share.  
+Caches are treated as an optimization, never as a dependency.
 
 | Region    | Traffic share | Uncached peak | Nodes per AZ (3 AZs) | Total nodes | Capacity after losing 1 AZ |
 |-----------|---------------|---------------|----------------------|-------------|----------------------------|
@@ -199,7 +205,8 @@ Failure scenarios for the largest region (us, capacity 720K RPS with all AZs up)
 | eu region lost, CDN up   | 275,000 / s | 720,000  | 62%      |
 | eu region lost, CDN down | 550,000 / s | 720,000  | 24%      |
 
-The tightest case in the fleet is **apac absorbing half of a lost eu region while the CDN is also down** (450K load on 480K capacity, 6% headroom). That is a double failure; load shedding (§8.13) covers it.
+The tightest case in the fleet is **apac absorbing half of a lost eu region while the CDN is also down** (450K load on 480K capacity, 6% headroom).  
+That is a double failure; load shedding (§8.13) covers it.
 
 ---
 
@@ -325,7 +332,8 @@ flowchart LR
     STREAM -->|delta snapshot| OS
 ```
 
-The **read path** (top) and the **write path** (bottom) share only object storage and the config service. A complete write-path outage leaves the read path serving yesterday's data, which is correct behaviour (P5).
+The **read path** (top) and the **write path** (bottom) share only object storage and the config service.  
+A complete write-path outage leaves the read path serving yesterday's data, which is correct behaviour (P5).
 
 ### 7.1 Component catalogue
 
@@ -381,7 +389,8 @@ sequenceDiagram
     end
 ```
 
-Most keystrokes end at step 2 or at the edge. Only cache misses reach a suggestion node, and the node answers from memory without any further network call.
+Most keystrokes end at step 2 or at the edge.  
+Only cache misses reach a suggestion node, and the node answers from memory without any further network call.
 
 ### 8.2 Client
 
@@ -401,7 +410,9 @@ Most keystrokes end at step 2 or at the edge. Only cache misses reach a suggesti
 | Failure behaviour       | Timeout at 300 ms; keep the previous list or show nothing                | Typing is never blocked                                   |
 | Telemetry               | Batch events every 5 s, 20 events, or on page hide                       | Feeds the write path (§10.3)                              |
 
-**Why provisional filtering is not the final answer.** The top 10 for `iph` may contain phrases that were not in the top 10 for `ip`. Filtering the old list is a correct *subset* but not a correct *ranking*, so it is always replaced by the server response.
+**Why provisional filtering is not the final answer.**  
+The top 10 for `iph` may contain phrases that were not in the top 10 for `ip`.  
+Filtering the old list is a correct *subset* but not a correct *ranking*, so it is always replaced by the server response.
 
 ### 8.3 Global traffic management
 
@@ -431,7 +442,10 @@ CDN-level origin failover is preferred over DNS failover because it reacts witho
 | Surrogate keys         | Each response tagged with stable hashes of its phrases               | Purge all responses containing a removed phrase (§10.13)   |
 | WAF and rate limiting  | Per-IP burst limits, bot management, input length caps               | Stops scraping and floods before they reach origin         |
 
-**What the edge absorbs.** The ~18,000 prefixes of length 1–3 in a locale receive a large share of requests and are nearly always cached. Popular longer prefixes add to that. The planning value is a **50% hit ratio**; real values are usually higher.
+**What the edge absorbs.**  
+The ~18,000 prefixes of length 1–3 in a locale receive a large share of requests and are nearly always cached.  
+Popular longer prefixes add to that.  
+The planning value is a **50% hit ratio**; real values are usually higher.
 
 ### 8.5 Regional load balancer
 
@@ -494,9 +508,13 @@ flowchart TB
 | Snapshot manager | Load, verify and atomically swap data               | `memmap2` + `fst` + `arc-swap`                       | Readers never block                                      |
 | Telemetry        | Metrics and sampled traces                          | Prometheus exporter, `tracing`                       | Raw queries never logged; only hashes                    |
 
-**Lock-free reads.** Every request calls `load()` on an `ArcSwap` pointer and reads the snapshot through it. A swap stores a new pointer; requests already running keep the old snapshot alive through its reference count until they finish. No request ever waits on a lock.
+**Lock-free reads.**  
+Every request calls `load()` on an `ArcSwap` pointer and reads the snapshot through it.  
+A swap stores a new pointer; requests already running keep the old snapshot alive through its reference count until they finish.  
+No request ever waits on a lock.
 
-**Allocation discipline.** A fast allocator (mimalloc or jemalloc), small fixed-size candidate buffers on the stack, and reused serialization buffers keep per-request allocations near zero.
+**Allocation discipline.**  
+A fast allocator (mimalloc or jemalloc), small fixed-size candidate buffers on the stack, and reused serialization buffers keep per-request allocations near zero.
 
 ### 8.7 Index data structures
 
@@ -522,7 +540,10 @@ flowchart LR
 | Prefix hot map | Prefix with > 1,000 completions             | Top-10 ids                   | Short and popular prefixes  | ~0.1 GB             |
 | Infix hot map  | Token-key prefix with > 1,000 matching keys | Top-10 ids                   | Short infix queries         | < 0.1 GB            |
 
-**What an FST is.** A finite state transducer is a minimal automaton over sorted keys. It shares common prefixes *and* common suffixes, so a set of 50 M phrases takes roughly half the memory of the raw bytes, while still supporting lookups by prefix, by range, and by any automaton (for example, a Levenshtein automaton for typos). The `fst` crate builds it from sorted input and reads it directly from a memory-mapped file.
+**What an FST is.**  
+A finite state transducer is a minimal automaton over sorted keys.  
+It shares common prefixes *and* common suffixes, so a set of 50 M phrases takes roughly half the memory of the raw bytes, while still supporting lookups by prefix, by range, and by any automaton (for example, a Levenshtein automaton for typos).  
+The `fst` crate builds it from sorted input and reads it directly from a memory-mapped file.
 
 **ID equals rank.** The builder assigns ids in **descending weight order**: id 0 is the most popular phrase. Consequences:
 
@@ -540,9 +561,12 @@ flowchart LR
 | Token FST  | `pro max`           |
 | Token FST  | `max`               |
 
-An input like `15 pr` becomes a **prefix search** in the token FST. Each key keeps only its **10 best ids**. This is still exact: the overall top 10 among all matching keys is always contained in the union of each key's own top 10.
+An input like `15 pr` becomes a **prefix search** in the token FST. Each key keeps only its **10 best ids**.  
+This is still exact: the overall top 10 among all matching keys is always contained in the union of each key's own top 10.
 
-**Hot maps bound the worst case.** A prefix such as `a` matches millions of phrases. Scanning them all per request is unacceptable, so every prefix with more than M = 1,000 completions has its answer precomputed (§4.2 proves there are at most ~1 M such prefixes). Any prefix *not* in the hot map has at most 1,000 completions, so the scan is always small.
+**Hot maps bound the worst case.** A prefix such as `a` matches millions of phrases.  
+Scanning them all per request is unacceptable, so every prefix with more than M = 1,000 completions has its answer precomputed (§4.2 proves there are at most ~1 M such prefixes).  
+Any prefix *not* in the hot map has at most 1,000 completions, so the scan is always small.
 
 **Snapshot layout on disk**
 
@@ -561,7 +585,8 @@ snapshots/
       ...
 ```
 
-FSTs, postings and the phrase table are memory-mapped. Hot maps are loaded into an in-process hash map (FxHash) at load time.
+FSTs, postings and the phrase table are memory-mapped.  
+Hot maps are loaded into an in-process hash map (FxHash) at load time.
 
 ### 8.8 Query algorithm: tiered lookup
 
@@ -641,7 +666,9 @@ fn top_k<A: Automaton>(map: &Map<memmap2::Mmap>, aut: A, k: usize, max_keys: usi
 // let ids = top_k(&snap.phrases, Str::new(&q).starts_with(), 10, 1_000);
 ```
 
-**Empty input.** When the box is focused with no text, the service returns the locale's top trending phrases. That response is identical for everyone and almost always served by the CDN.
+**Empty input.**  
+When the box is focused with no text, the service returns the locale's top trending phrases.  
+That response is identical for everyone and almost always served by the CDN.
 
 ### 8.9 Language analysis and normalization
 
@@ -656,7 +683,9 @@ fn top_k<A: Automaton>(map: &Map<memmap2::Mmap>, aut: A, k: usize, max_keys: usi
 
 **Stemming is never applied to the prefix tier.** The last word is usually incomplete, and stemmers produce wrong results on partial words.
 
-**One implementation.** The `normalizer` crate is used by the event gateway, the index builder and the suggestion service. Every snapshot manifest records the normalizer version it was built with, and a node **refuses a snapshot built with a different version**. This prevents the classic bug where keys were normalized one way at build time and queries another way at serve time.
+**One implementation.** The `normalizer` crate is used by the event gateway, the index builder and the suggestion service.  
+Every snapshot manifest records the normalizer version it was built with, and a node **refuses a snapshot built with a different version**.  
+This prevents the classic bug where keys were normalized one way at build time and queries another way at serve time.
 
 ### 8.10 Latency budget (origin path)
 
@@ -675,7 +704,8 @@ Measured from load balancer ingress to egress.
 | Node to LB to egress              | 0.300        | 1.50            |
 | **Total**                         | **~0.63**    | **~5.68**       |
 
-About 4 ms of headroom remains for queueing and noise. **Rust matters here** because there are no garbage-collection pauses: the p99 and p99.9 stay close to the typical path instead of being dominated by pause times.
+About 4 ms of headroom remains for queueing and noise.  
+**Rust matters here** because there are no garbage-collection pauses: the p99 and p99.9 stay close to the typical path instead of being dominated by pause times.
 
 ### 8.11 Capacity plan and deployment topology
 
@@ -699,7 +729,8 @@ flowchart TB
     OBJ -.-> NC
 ```
 
-The diagram shows the us region (3 nodes per AZ). The eu and apac regions are identical with 2 nodes per AZ (§4.5).
+The diagram shows the us region (3 nodes per AZ).  
+The eu and apac regions are identical with 2 nodes per AZ (§4.5).
 
 | Aspect                | Decision                                                                      |
 |-----------------------|-------------------------------------------------------------------------------|
@@ -752,7 +783,8 @@ stateDiagram-v2
     Draining --> [*]
 ```
 
-A node in `Refreshing` keeps serving traffic from its current snapshot. Only `Ready` and `Refreshing` report healthy on `/ready`.
+A node in `Refreshing` keeps serving traffic from its current snapshot.  
+Only `Ready` and `Refreshing` report healthy on `/ready`.
 
 **Hot swap steps**
 
@@ -776,7 +808,8 @@ Snapshots are memory-mapped, so a swap does not need two full copies in RAM: pag
 | L3    | Concurrency limit reached | Shed requests with 503; LB retries another node | Some keystrokes show no suggestions |
 | Edge  | Origin errors or timeouts | CDN serves stale responses (`stale-if-error`)   | Slightly old suggestions            |
 
-The order follows principle P5: **stale, then partial, then empty, then error**. Tiers 1–2 alone cost so little that a node at L2 handles several times its normal request rate.
+The order follows principle P5: **stale, then partial, then empty, then error**.  
+Tiers 1–2 alone cost so little that a node at L2 handles several times its normal request rate.
 
 ---
 
@@ -828,7 +861,8 @@ The order follows principle P5: **stale, then partial, then empty, then error**.
 
 ## 10. Write Path: Ranking and Freshness
 
-The write path decides **what** can be suggested and **in which order**. It never touches a serving node directly; its only output is versioned snapshots in object storage and denylist updates in the config service.
+The write path decides **what** can be suggested and **in which order**.  
+It never touches a serving node directly; its only output is versioned snapshots in object storage and denylist updates in the config service.
 
 ### 10.1 Goals
 
@@ -900,7 +934,8 @@ flowchart LR
 | `events.search.v1`  | 128        | `session_hash` | 7 days    | RF 3, min in-sync 2 |
 | `events.suggest.v1` | 128        | `session_hash` | 7 days    | RF 3, min in-sync 2 |
 
-Each region runs its own Kafka cluster. MirrorMaker 2 replicates topics to a central analytics region where the batch and streaming jobs run. Delivery is **at-least-once**; duplicates are removed by `event_id` downstream.
+Each region runs its own Kafka cluster. MirrorMaker 2 replicates topics to a central analytics region where the batch and streaming jobs run.  
+Delivery is **at-least-once**; duplicates are removed by `event_id` downstream.
 
 ### 10.4 Data lake
 
@@ -911,7 +946,8 @@ Each region runs its own Kafka cluster. MirrorMaker 2 replicates topics to a cen
 | `phrase_state`         | locale                   | Current + 7 versions | Rolling decayed signals (§11.2)          | Pipeline              |
 | `builder_input`        | snapshot version, locale | 30 days              | Final phrases, display forms and weights | Pipeline, audit       |
 
-Raw query text is the most sensitive data in the system: it can contain names, addresses and other personal details. Only phrases that pass the privacy filters (§10.7) ever leave the restricted zone.
+Raw query text is the most sensitive data in the system: it can contain names, addresses and other personal details.  
+Only phrases that pass the privacy filters (§10.7) ever leave the restricted zone.
 
 ### 10.5 Nightly aggregation pipeline
 
@@ -943,7 +979,10 @@ flowchart TD
 | 9     | Write (locale, normalized phrase, display text, weight, stable phrase hash)                      | Contract between batch and builder                        |
 | 10–12 | Build, validate and publish (§10.8, §10.9)                                                       | Produce the snapshot                                      |
 
-**Incremental decay.** With a half-life of H days, the daily decay factor is `2^(-1/H)`. For H = 14 that is **0.9517**. Each night multiplies yesterday's decayed counts by 0.9517 and adds today's counts. The result is mathematically identical to summing every past day with its own decay weight, but costs one pass over the state table instead of 90 days of events.
+**Incremental decay.**  
+With a half-life of H days, the daily decay factor is `2^(-1/H)`.  
+For H = 14 that is **0.9517**. Each night multiplies yesterday's decayed counts by 0.9517 and adds today's counts.  
+The result is mathematically identical to summing every past day with its own decay weight, but costs one pass over the state table instead of 90 days of events.
 
 ### 10.6 Ranking model
 
@@ -966,7 +1005,8 @@ COEC_s = (clicks + α) / (expected_clicks + α)        α = 50,  prior = 1.0
 Succ_s = (successes + β × μ) / (outcomes + β)        β = 100, μ = locale mean success rate
 ```
 
-A phrase with little data gets values close to the prior; a phrase with plenty of data gets its observed values. `COEC_s` is also capped at 3.
+A phrase with little data gets values close to the prior; a phrase with plenty of data gets its observed values.  
+`COEC_s` is also capped at 3.
 
 #### Score
 
@@ -985,7 +1025,9 @@ S = w_f × ln(1 + F)  +  w_c × ln(COEC_s)  +  w_s × Succ_s  −  w_z × Z
 | `w_s`     | 0.8     | Success weight                          |
 | `w_z`     | 1.5     | Zero-result penalty                     |
 
-**Why logarithmic popularity.** Query popularity is heavy-tailed (Zipf-like). Using `ln(1 + F)` lets engagement and success reorder phrases of *similar* popularity without letting a rare phrase jump above one that is vastly more popular. With COEC capped at 3, the engagement and success terms together can move a score by at most `0.5 × ln 3 + 0.8 ≈ 1.35`, which compensates for a popularity gap of at most `e^1.35 ≈ 3.9×`.
+**Why logarithmic popularity.**  
+Query popularity is heavy-tailed (Zipf-like). Using `ln(1 + F)` lets engagement and success reorder phrases of *similar* popularity without letting a rare phrase jump above one that is vastly more popular.  
+With COEC capped at 3, the engagement and success terms together can move a score by at most `0.5 × ln 3 + 0.8 ≈ 1.35`, which compensates for a popularity gap of at most `e^1.35 ≈ 3.9×`.
 
 **Decay weights for H = 14 days**
 
@@ -1007,7 +1049,8 @@ At a steady rate of `r` users per day, `F` converges to `r ÷ (1 − 0.9517) ≈
 | `iphone 15 case`         | 45,000  | 10.714  | 1.40   | +0.168         | 0.81   | +0.648     | 0.00 | 0.000  | **11.531** |
 | `iphone 15 pro max leak` | 2,000   | 7.601   | 0.60   | −0.255         | 0.30   | +0.240     | 0.20 | −0.300 | **7.286**  |
 
-`iphone 15 case` has better engagement and success than `iphone 15`, but not enough to close a 2.7× popularity gap. The third phrase has poor engagement and many dead ends, so it ranks far below.
+`iphone 15 case` has better engagement and success than `iphone 15`, but not enough to close a 2.7× popularity gap.  
+The third phrase has poor engagement and many dead ends, so it ranks far below.
 
 #### From score to snapshot
 
@@ -1035,7 +1078,8 @@ At a steady rate of `r` users per day, `F` converges to `r ÷ (1 − 0.9517) ≈
 | Online  | Search success rate        | As defined for `Succ`                                                       |
 | Online  | Interleaving win rate      | Team-draft interleaving of two rankers in one list; more sensitive than A/B |
 
-Offline metrics are computed on a held-out day before any weight change; online experiments then confirm the change. The parameter table above is the starting point for a learning-to-rank model (§15).
+Offline metrics are computed on a held-out day before any weight change; online experiments then confirm the change.  
+The parameter table above is the starting point for a learning-to-rank model (§15).
 
 ### 10.7 Safety, privacy and abuse filtering
 
@@ -1049,7 +1093,9 @@ Offline metrics are computed on a held-out day before any weight change; online 
 | Manipulation detection | Flag phrases whose growth comes from new accounts, few networks, or synchronized bursts; hold for review                                    | Batch and real time           |
 | Denylist               | Moderator-managed list, applied at build time and again at serving time                                                                     | All stages + serving          |
 
-**Ordering matters.** Privacy filters run **before** any data leaves the restricted zone of the lake. A phrase typed by only a handful of people (often personal data) never reaches the builder input, an index, or a log.
+**Ordering matters.**  
+Privacy filters run **before** any data leaves the restricted zone of the lake.  
+A phrase typed by only a handful of people (often personal data) never reaches the builder input, an index, or a log.
 
 ### 10.8 Index builder
 
@@ -1065,7 +1111,9 @@ A Rust batch program that shares the `fst`, `normalizer` and snapshot-format cra
 | 6    | Compute both hot maps in a single pass over the sorted keys (below)                                    | Only prefixes with > 1,000 completions                 |
 | 7    | Write the manifest: versions, sizes, SHA-256 per file, normalizer version, parent version; sign it     | Signing key held in a KMS                              |
 
-**Hot map in one pass.** Walking the sorted keys is equivalent to a depth-first walk of a trie. A stack holds, for each prefix length of the current key, a counter and a small heap of the 10 smallest ids:
+**Hot map in one pass.**  
+Walking the sorted keys is equivalent to a depth-first walk of a trie.  
+A stack holds, for each prefix length of the current key, a counter and a small heap of the 10 smallest ids:
 
 ```text
 for each key in sorted order:
@@ -1079,9 +1127,12 @@ for each key in sorted order:
 at the end, pop and emit everything remaining
 ```
 
-Cost is proportional to the total bytes of all keys (~1 GB for a large locale) with an O(log 10) heap per frame. A large locale builds in under 20 minutes on one 32-core machine; locales build in parallel.
+Cost is proportional to the total bytes of all keys (~1 GB for a large locale) with an O(log 10) heap per frame.  
+A large locale builds in under 20 minutes on one 32-core machine; locales build in parallel.
 
-**Determinism.** Stable sorts and fixed tie-breaks make the output byte-identical for identical input. Two builds can be diffed, and any snapshot can be reproduced from the lake for debugging.
+**Determinism.**  
+Stable sorts and fixed tie-breaks make the output byte-identical for identical input.  
+Two builds can be diffed, and any snapshot can be reproduced from the lake for debugging.
 
 ### 10.9 Validation and publishing
 
@@ -1138,7 +1189,9 @@ flowchart LR
     OS --> NODES
 ```
 
-**Counting.** A Flink job keyed by (locale, normalized phrase) keeps HyperLogLog sketches of distinct users in 5-minute buckets. HyperLogLog counts distinct users in a few KB per phrase, without storing user ids.
+**Counting.**  
+A Flink job keyed by (locale, normalized phrase) keeps HyperLogLog sketches of distinct users in 5-minute buckets.  
+HyperLogLog counts distinct users in a few KB per phrase, without storing user ids.
 
 **Baseline.** The expected number of distinct users per 5 minutes comes from the nightly state: `b = (F × (1 − 0.9517)) ÷ 288 × hour_of_day_factor`. A phrase never seen before gets `b = 0.5`.
 
@@ -1164,13 +1217,21 @@ S_trend = w_f × ln(1 + F_trend) + w_s × μ          COEC = 1 contributes 0;  �
 weight  = max(S_base, S_trend)
 ```
 
-For `iphone 17 launch`: `F_trend = 3,000 × 96 = 288,000`, so `S_trend = 12.571 + 0.8 × 0.6 = 13.051`. It ranks above `iphone 15` (12.304) while the spike lasts.
+For `iphone 17 launch`: `F_trend = 3,000 × 96 = 288,000`, so `S_trend = 12.571 + 0.8 × 0.6 = 13.051`.  
+It ranks above `iphone 15` (12.304) while the spike lasts.
 
-**Lifecycle.** The trend score is recomputed every window from the current count, so it falls naturally as interest fades. An entry is removed when `z < 2` for 30 minutes, or after 48 hours, by which time the nightly base has absorbed it.
+**Lifecycle.**  
+The trend score is recomputed every window from the current count, so it falls naturally as interest fades.  
+An entry is removed when `z < 2` for 30 minutes, or after 48 hours, by which time the nightly base has absorbed it.
 
-**Delta snapshot.** At most 100K phrases per locale, in the same formats as the base (phrase table with weights, phrase FST, token FST; no hot maps needed at this size). Delta ids are local to the delta; merging uses weights, not ids. The delta builder publishes every 2 minutes and notifies nodes through pub/sub. Nodes swap a separate `ArcSwap` pointer for the delta.
+**Delta snapshot.**  
+At most 100K phrases per locale, in the same formats as the base (phrase table with weights, phrase FST, token FST; no hot maps needed at this size).  
+Delta ids are local to the delta; merging uses weights, not ids.  
+The delta builder publishes every 2 minutes and notifies nodes through pub/sub. Nodes swap a separate `ArcSwap` pointer for the delta.
 
-**Targeted CDN purge.** When a phrase enters the delta, the builder checks each of its prefixes (up to 8 characters) against the base snapshot's 10th-best weight for that prefix. Only prefixes where the new phrase actually enters the top 10 are purged, so the purge list stays tiny.
+**Targeted CDN purge.**  
+When a phrase enters the delta, the builder checks each of its prefixes (up to 8 characters) against the base snapshot's 10th-best weight for that prefix.  
+Only prefixes where the new phrase actually enters the top 10 are purged, so the purge list stays tiny.
 
 ### 10.12 Query-time merge of base and delta
 
@@ -1182,7 +1243,8 @@ For `iphone 17 launch`: `F_trend = 3,000 × 96 = 288,000`, so `S_trend = 12.571 
 | 4    | Sort by adjusted weight (§8.8); keep 10                                     |
 | 5    | Mark entries that come from the delta as `"kind": "trending"`               |
 
-At most 20 candidates are merged, which takes well under a microsecond. The result-cache key contains both the base and delta versions, so a delta swap invalidates cached results automatically.
+At most 20 candidates are merged, which takes well under a microsecond.  
+The result-cache key contains both the base and delta versions, so a delta swap invalidates cached results automatically.
 
 ### 10.13 Emergency removal (kill switch)
 
@@ -1201,7 +1263,8 @@ sequenceDiagram
     P->>P: Exclude phrase from base snapshot permanently
 ```
 
-- The surrogate key is a **stable hash of (locale, normalized phrase)**, identical across snapshot versions. One purge removes every cached response containing the phrase, including fuzzy and infix responses that could not be enumerated by prefix.
+- The surrogate key is a **stable hash of (locale, normalized phrase)**, identical across snapshot versions.  
+  One purge removes every cached response containing the phrase, including fuzzy and infix responses that could not be enumerated by prefix.
 - The denylist filter runs **after** the result cache inside the node, so cached results are filtered too.
 - The trending detector and the nightly batch read the same denylist, so a removed phrase cannot re-enter through either path.
 - Every entry carries a reason and a ticket reference for audit.
@@ -1228,7 +1291,9 @@ gantt
     Progressive rollout           :a9, after a8, 90m
 ```
 
-The new base is live everywhere about 7 hours after midnight UTC. Rollout batches within each region are paced to that region's off-peak hours. If any stage fails, it is retried twice; after that the fleet simply keeps the previous version, and the freshness alert fires once the base is 30 hours old.
+The new base is live everywhere about 7 hours after midnight UTC.  
+Rollout batches within each region are paced to that region's off-peak hours.  
+If any stage fails, it is retried twice; after that the fleet simply keeps the previous version, and the freshness alert fires once the base is 30 hours old.
 
 ### 10.15 Write path failure modes
 
