@@ -662,7 +662,8 @@ Recovery is "recompute the diff", not "remember where the script stopped".
 
 ### 13.04 What happens if a controller misses an event?
 
-Nothing permanent. Processing is level-triggered, so the next reconcile (triggered by any later event, a relist or a resync) sees the real gap between desired and actual state and closes it.
+Nothing permanent.  
+Processing is level-triggered, so the next reconcile (triggered by any later event, a relist or a resync) sees the real gap between desired and actual state and closes it.
 
 ### 13.05 Why not just process events reliably?
 
@@ -671,8 +672,10 @@ Level-triggered reconciliation only needs "eventually wake up and read the lates
 
 ### 13.06 Who is responsible for getting a pod running after a deploy?
 
-No single component. A chain of independent control loops moves the state one step each: goal, replica group, pods, scheduler placement, kubelet starting containers.  
-Each watches the API and writes back to it. This choreography makes the system resilient and extensible, at the cost of spread-out debugging.
+No single component.  
+A chain of independent control loops moves the state one step each: goal, replica group, pods, scheduler placement, kubelet starting containers.  
+Each watches the API and writes back to it.  
+This choreography makes the system resilient and extensible, at the cost of spread-out debugging.
 
 ### 13.07 Is Kubernetes strongly or eventually consistent?
 
@@ -692,7 +695,8 @@ Risk grows with the length of the outage.
 ### 13.10 A node loses network to the control plane. What happens to its pods?
 
 After a timeout the node is treated as dead; stateless pods are recreated elsewhere while the old ones may still run.  
-Stateful identities are not duplicated until the node is confirmed gone, to avoid split-brain. After the partition heals, stale copies are stopped and the cluster converges.
+Stateful identities are not duplicated until the node is confirmed gone, to avoid split-brain.  
+After the partition heals, stale copies are stopped and the cluster converges.
 
 ### 13.11 Why does recovery from a node failure take minutes, not seconds?
 
