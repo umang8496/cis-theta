@@ -109,7 +109,8 @@ flowchart LR
     H20 --> H21["H21 Capstone"]
 ```
 
-Teaching order is H01 to H21 as numbered. Part C (crypto) depends only on H01, so it can be pulled forward if the owner prefers.
+Teaching order is H01 to H21 as numbered.  
+Part C (crypto) depends only on H01, so it can be pulled forward if the owner prefers.
 
 ---
 
@@ -394,16 +395,16 @@ R2.2 gives the summary. This module goes to the frames (RFC 9113).
 | H08 | Connections, proxies and upgrades               | Completed   |
 | H09 | Semantics bridge: negotiation, ranges, caching  | Completed   |
 | H10 | State on a stateless protocol: cookies          | Completed   |
-| H11 | Symmetric crypto, hashes, MACs, AEAD            | Not started |
-| H12 | Public-key crypto and key exchange              | Not started |
-| H13 | Certificates and PKI                            | Not started |
-| H14 | TLS 1.2 and the record layer                    | Not started |
-| H15 | TLS 1.3                                         | Not started |
-| H16 | HTTPS in production                             | Not started |
-| H17 | HTTP/2                                          | Not started |
-| H18 | QUIC                                            | Not started |
-| H19 | HTTP/3                                          | Not started |
-| H20 | End-to-end latency and performance              | Not started |
+| H11 | Symmetric crypto, hashes, MACs, AEAD            | Completed   |
+| H12 | Public-key crypto and key exchange              | Completed   |
+| H13 | Certificates and PKI                            | Completed   |
+| H14 | TLS 1.2 and the record layer                    | Completed   |
+| H15 | TLS 1.3                                         | Completed   |
+| H16 | HTTPS in production                             | Completed   |
+| H17 | HTTP/2                                          | Completed   |
+| H18 | QUIC                                            | Completed   |
+| H19 | HTTP/3                                          | Completed   |
+| H20 | End-to-end latency and performance              | Completed   |
 | H21 | Capstone: "type a URL and press Enter"          | Not started |
 
 ---
