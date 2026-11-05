@@ -201,17 +201,17 @@ This module answers the question of why clients send `X-` headers.
 | R01 | Foundations                     | Completed   |
 | R02 | HTTP as the substrate           | Completed   |
 | R03 | HTTP status codes (complete)    | Completed   |
-| R04 | HTTP headers, standard and `X-` | Not started |
-| R05 | Resource modeling               | Not started |
-| R06 | Request and response design     | Not started |
-| R07 | Error model                     | Not started |
-| R08 | Idempotency and concurrency     | Not started |
-| R09 | Caching                         | Not started |
-| R10 | Security                        | Not started |
-| R11 | Evolution and versioning        | Not started |
-| R12 | HATEOAS and hypermedia          | Not started |
-| R13 | Operating APIs at scale         | Not started |
-| R14 | Contracts and tooling           | Not started |
+| R04 | HTTP headers, standard and `X-` | Completed   |
+| R05 | Resource modeling               | Completed   |
+| R06 | Request and response design     | Completed   |
+| R07 | Error model                     | Completed   |
+| R08 | Idempotency and concurrency     | Completed   |
+| R09 | Caching                         | Completed   |
+| R10 | Security                        | Completed   |
+| R11 | Evolution and versioning        | Completed   |
+| R12 | HATEOAS and hypermedia          | Completed   |
+| R13 | Operating APIs at scale         | Completed   |
+| R14 | Contracts and tooling           | Completed   |
 | R15 | API design review (capstone)    | Not started |
 
 ---
