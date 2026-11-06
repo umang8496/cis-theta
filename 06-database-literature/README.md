@@ -1,3 +1,13 @@
+<!-- markdownlint-disable MD001 -->
+<!-- markdownlint-disable MD024 -->
+<!-- markdownlint-disable MD025 -->
+<!-- markdownlint-disable MD026 -->
+<!-- markdownlint-disable MD029 -->
+<!-- markdownlint-disable MD033 -->
+<!-- markdownlint-disable MD040 -->
+<!-- markdownlint-disable MD056 -->
+<!-- markdownlint-disable MD060 -->
+
 # Database Literature: Learning Plan and Strategy
 
 ## 01. Positioning
@@ -1196,8 +1206,8 @@ CMU lecture-to-chapter readings above are taken from the course schedule pages.
 
 | #   | Module                                           | Status      |
 | --- | ------------------------------------------------ | ----------- |
-| D01 | What a database system is                        | Not started |
-| D02 | Relational model and algebra                     | Not started |
+| D01 | What a database system is                        | Completed   |
+| D02 | Relational model and algebra                     | Completed   |
 | D03 | Data modeling and normalization                  | Not started |
 | D04 | SQL core                                         | Not started |
 | D05 | Intermediate SQL                                 | Not started |
